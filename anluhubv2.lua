@@ -47,7 +47,7 @@ CharGroup:AddSlider('BoostForce', {Text = 'Boost Power', Default = 3, Min = 1, M
 -- [Anti Aim 섹션]
 AAGroup:AddToggle('AAEnabled', {Text = 'Enable Anti Aim'})
 
--- Yaw 설정 (최대 180도까지 조절 가능)
+-- Yaw 설정 (0 ~ 180도)
 AAGroup:AddDropdown('YawMode', {
     Values = {'Static', 'Jitter', 'Random', 'Extended Random'},
     Default = 1,
@@ -57,19 +57,21 @@ AAGroup:AddDropdown('YawMode', {
 AAGroup:AddSlider('YawAngle', {Text = 'Torso Yaw Limit', Default = 90, Min = 0, Max = 180, Rounding = 0})
 AAGroup:AddSlider('YawSpeed', {Text = 'Yaw Speed / Jitter Speed', Default = 10, Min = 1, Max = 50, Rounding = 0})
 
--- Pitch 설정
+-- Pitch 설정 (-180 ~ 180도 확장)
 AAGroup:AddDropdown('PitchMode', {
     Values = {'Static', 'Up', 'Down', 'Random', 'Extended Random'},
     Default = 1,
     Multi = false,
     Text = 'Pitch Mode'
 })
-AAGroup:AddSlider('PitchAngle', {Text = 'Pitch Angle (Static)', Default = 0, Min = -89, Max = 89, Rounding = 0})
+AAGroup:AddSlider('PitchAngle', {Text = 'Pitch Angle (Static)', Default = 0, Min = -180, Max = 180, Rounding = 0})
 
 -- 관절 원본 상태 저장 변수
 local originalWaistC0 = nil
 local originalRootC0 = nil
 local originalNeckC0 = nil
+local originalLeftHipC0 = nil
+local originalRightHipC0 = nil
 
 -- 4. 메인 루프 (Movement + Anti Aim)
 RunService.RenderStepped:Connect(function(delta)
@@ -112,11 +114,15 @@ RunService.RenderStepped:Connect(function(delta)
         hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (boost * delta))
     end
 
-    -- [4] Anti Aim (상체 몸통만 분리하여 회전)
+    -- [4] Anti Aim (다리 고정 + Pitch 180도 연산)
     local upperTorso = char:FindFirstChild("UpperTorso")
     local waist = upperTorso and upperTorso:FindFirstChild("Waist")
     local rootJoint = hrp:FindFirstChild("RootJoint")
     local neck = (char:FindFirstChild("Torso") and char.Torso:FindFirstChild("Neck")) or (char:FindFirstChild("Head") and char.Head:FindFirstChild("Neck")) or (upperTorso and upperTorso:FindFirstChild("Neck"))
+    
+    local torso = char:FindFirstChild("Torso")
+    local leftHip = torso and torso:FindFirstChild("Left Hip")
+    local rightHip = torso and torso:FindFirstChild("Right Hip")
 
     if Toggles.AAEnabled.Value then
         local yaw = 0
@@ -124,7 +130,7 @@ RunService.RenderStepped:Connect(function(delta)
         local speed = Options.YawSpeed.Value
         local yawLimit = Options.YawAngle.Value
 
-        -- Yaw 연산 (지정한 각도 범위 0~180도)
+        -- Yaw 연산 (0~180도)
         local yMode = Options.YawMode.Value
         if yMode == 'Static' then
             yaw = math.rad(yawLimit)
@@ -136,28 +142,38 @@ RunService.RenderStepped:Connect(function(delta)
             yaw = math.rad(math.random(-yawLimit, yawLimit))
         end
 
-        -- Pitch 연산
+        -- Pitch 연산 (-180~180도)
         local pMode = Options.PitchMode.Value
         if pMode == 'Up' then
-            pitch = math.rad(-89)
+            pitch = math.rad(-180)
         elseif pMode == 'Down' then
-            pitch = math.rad(89)
+            pitch = math.rad(180)
         elseif pMode == 'Random' then
-            pitch = math.rad(math.random(-89, 89))
+            pitch = math.rad(math.random(-180, 180))
         elseif pMode == 'Extended Random' then
             pitch = math.rad(math.random(-180, 180))
         elseif pMode == 'Static' then
             pitch = math.rad(Options.PitchAngle.Value)
         end
 
-        -- R15 상체(Waist) 모터 전용 회전 (하체/다리 완벽 고정)
+        -- R15 상체 전용 회전 (하체 자동 고정)
         if waist then
             if not originalWaistC0 then originalWaistC0 = waist.C0 end
             waist.C0 = originalWaistC0 * CFrame.Angles(pitch, yaw, 0)
-        -- R6 및 기타 백업 (축 쏠림 방지 정렬)
+        -- R6 상체 회전 + 다리 역행렬 고정 연산
         elseif rootJoint then
             if not originalRootC0 then originalRootC0 = rootJoint.C0 end
             rootJoint.C0 = originalRootC0 * CFrame.Angles(0, 0, yaw)
+
+            -- R6 다리를 몸통 회전 반대 방향으로 상쇄시켜 제자리에 고정
+            if leftHip and rightHip then
+                if not originalLeftHipC0 then originalLeftHipC0 = leftHip.C0 end
+                if not originalRightHipC0 then originalRightHipC0 = rightHip.C0 end
+
+                local counterMatrix = (rootJoint.C0:Inverse() * originalRootC0)
+                leftHip.C0 = counterMatrix * originalLeftHipC0
+                rightHip.C0 = counterMatrix * originalRightHipC0
+            end
         end
 
         if neck then
@@ -165,19 +181,12 @@ RunService.RenderStepped:Connect(function(delta)
             neck.C0 = originalNeckC0 * CFrame.Angles(pitch, 0, 0)
         end
     else
-        -- 비활성화 시 즉시 복구
-        if originalWaistC0 and waist then
-            waist.C0 = originalWaistC0
-            originalWaistC0 = nil
-        end
-        if originalRootC0 and rootJoint then
-            rootJoint.C0 = originalRootC0
-            originalRootC0 = nil
-        end
-        if originalNeckC0 and neck then
-            neck.C0 = originalNeckC0
-            originalNeckC0 = nil
-        end
+        -- 비활성화 시 모든 관절 원상복구
+        if originalWaistC0 and waist then waist.C0 = originalWaistC0 originalWaistC0 = nil end
+        if originalRootC0 and rootJoint then rootJoint.C0 = originalRootC0 originalRootC0 = nil end
+        if originalNeckC0 and neck then neck.C0 = originalNeckC0 originalNeckC0 = nil end
+        if originalLeftHipC0 and leftHip then leftHip.C0 = originalLeftHipC0 originalLeftHipC0 = nil end
+        if originalRightHipC0 and rightHip then rightHip.C0 = originalRightHipC0 originalRightHipC0 = nil end
     end
 end)
 
