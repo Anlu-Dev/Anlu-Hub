@@ -1,6 +1,11 @@
 --[[
-    Bypass :shush: + Anlu Hub Integrated
+    Bypass :shush: + Anlu Hub Integrated (Fixed Version)
 ]]
+
+-- LPH_NO_VIRTUALIZE 에러 방지용 정의
+if not LPH_NO_VIRTUALIZE then
+    LPH_NO_VIRTUALIZE = function(f) return f end
+end
 
 pcall(LPH_NO_VIRTUALIZE(function()
     local bypassed = false
@@ -992,4 +997,3 @@ pcall(LPH_NO_VIRTUALIZE(function()
     Library.ToggleKeybind = Options.MenuKeybind
     -- [[ ANLU HUB END ]]
 end))
-))
