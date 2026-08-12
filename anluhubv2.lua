@@ -50,7 +50,6 @@ local Tabs = {
 local RageGroup = Tabs.Main:AddLeftGroupbox('360 Rage Bot')
 local TargetGroup = Tabs.Main:AddRightGroupbox('Rage Target Settings')
 
--- Rage Bot 마스터 토글 (켜면 하위 항목 자동 전체 활성화)
 RageGroup:AddToggle('RageEnabled', {
     Text = 'Enable Rage Bot',
     Default = false,
@@ -61,7 +60,7 @@ RageGroup:AddToggle('RageEnabled', {
     end
 })
 
-RageGroup:AddToggle('TargetTP', {Text = 'TP Above Target (1인칭 전용)', Default = true})
+RageGroup:AddToggle('TargetTP', {Text = 'TP Above Target (조건 만족 시)', Default = true})
 RageGroup:AddToggle('SilentAim', {Text = '360° Silent Aim', Default = true})
 RageGroup:AddToggle('AutoShoot', {Text = 'Auto Fire', Default = true})
 
@@ -128,41 +127,74 @@ end
 if LocalPlayer.Character then UpdateCache(LocalPlayer.Character) end
 LocalPlayer.CharacterAdded:Connect(UpdateCache)
 
--- 4. 유틸리티 함수 (1인칭 여부 / 무적 체크)
-local function IsFirstPerson()
+-- 4. 필터링 유틸리티 함수들
+
+-- 내 캐릭터 1인칭 검사
+local function IsSelfFirstPerson()
     local char = LocalPlayer.Character
     if not char then return false end
     local head = char:FindFirstChild("Head")
     if not head then return false end
-    -- 카메라와 Head 사이 거리로 1인칭 판별 (2.5 Studs 미만일 경우 1인칭)
     return (Camera.CFrame.Position - head.Position).Magnitude < 2.5
 end
 
-local function IsInvincible(character)
+-- 상대방 1인칭 검사 (머리가 투명해진 상태인지 확인)
+local function IsTargetFirstPerson(player)
+    local char = player.Character
+    if not char then return false end
+    local head = char:FindFirstChild("Head")
+    if not head then return false end
+    
+    -- 로블록스는 1인칭 시 Head의 LocalTransparencyModifier가 1(투명)이 됨
+    return head.LocalTransparencyModifier >= 0.9 or head.Transparency >= 0.9
+end
+
+-- 무적 및 공격 불가능 상태 검사
+local function IsInvincibleOrImmune(character)
     if not character then return true end
-    -- ForceField 및 스폰 무적 태그 검사
+    -- ForceField 체크
     if character:FindFirstChildOfClass("ForceField") then return true end
-    if character:FindFirstChild("SpawnProtection") or character:FindFirstChild("Shield") or character:FindFirstChild("Invincible") then return true end
+    -- 스폰 및 버프 보호 태그 체크
+    if character:FindFirstChild("SpawnProtection") or character:FindFirstChild("Shield") or character:FindFirstChild("Invincible") or character:FindFirstChild("GodMode") then return true end
+    
+    -- 휴머노이드 검사
+    local hum = character:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return true end
+    
     return false
 end
 
--- 5. 360도 전방위 타깃 탐색 (거리 무제한 가능 + 무적 제외)
-local CurrentTargetPart = nil
+-- 팀원 검사
+local function IsTeammate(player)
+    if player == LocalPlayer then return true end
+    if LocalPlayer.Team ~= nil and player.Team ~= nil then
+        return player.Team == LocalPlayer.Team
+    end
+    if LocalPlayer.TeamColor == player.TeamColor then
+        return true
+    end
+    return false
+end
 
-local function Get360Target()
-    if not Toggles.RageEnabled.Value then return nil end
+-- 5. 조건 만족 전용 타깃 탐색 함수
+local CurrentTargetPart = nil
+local CurrentTargetPlayer = nil
+
+local function GetValidTarget()
+    if not Toggles.RageEnabled.Value then return nil, nil end
     local maxDistance = Options.RageRange.Value
-    local closestTarget = nil
+    local closestPart = nil
+    local closestPlayer = nil
     local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not myHRP then return nil end
+    if not myHRP then return nil, nil end
 
     for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
+        -- 팀원 제외
+        if not IsTeammate(player) and player.Character then
             local char = player.Character
-            local hum = char:FindFirstChildOfClass("Humanoid")
             
-            -- 무적이 아니고 체력이 남아있는 적만 필터링
-            if hum and hum.Health > 0 and not IsInvincible(char) then
+            -- 무적/체력 검사
+            if not IsInvincibleOrImmune(char) then
                 local partName = Options.TargetPart.Value
                 local targetPart = char:FindFirstChild(partName) or char:FindFirstChild("HumanoidRootPart")
                 
@@ -170,16 +202,17 @@ local function Get360Target()
                     local dist = (targetPart.Position - myHRP.Position).Magnitude
                     if dist <= maxDistance then
                         maxDistance = dist
-                        closestTarget = targetPart
+                        closestPart = targetPart
+                        closestPlayer = player
                     end
                 end
             end
         end
     end
-    return closestTarget
+    return closestPart, closestPlayer
 end
 
--- 6. 하이엔드 360° Silent Aim (Raycast + Mouse Hooking)
+-- 6. 하이엔드 360° Silent Aim
 local rawMetatable = getrawmetatable(game)
 local oldNamecall = rawMetatable.__namecall
 local oldIndex = rawMetatable.__index
@@ -226,7 +259,7 @@ end)
 
 setreadonly(rawMetatable, true)
 
--- 7. 강력한 Auto Fire 함수
+-- 7. Auto Fire 함수
 local function TriggerAutoShoot()
     local char = LocalPlayer.Character
     if not char then return end
@@ -255,13 +288,20 @@ RunService.Stepped:Connect(function(_, delta)
     local hum = char:FindFirstChild("Humanoid")
     if not hrp or not hum or hum.Health <= 0 then return end
 
-    -- 타깃 탐색
-    CurrentTargetPart = Get360Target()
+    -- 유효한 적 타깃 찾기
+    CurrentTargetPart, CurrentTargetPlayer = GetValidTarget()
 
-    -- [Rage Bot 동작 조건]
-    if Toggles.RageEnabled.Value and CurrentTargetPart then
-        -- 1인칭 상태일 때만 적 위 상공 밀착 텔레포트 적용
-        if Toggles.TargetTP.Value and IsFirstPerson() then
+    -- [Rage Bot 실행 조건]
+    if Toggles.RageEnabled.Value and CurrentTargetPart and CurrentTargetPlayer then
+        -- 텔레포트 조건 검사:
+        -- 1. 나 자신이 1인칭일 것
+        -- 2. 적도 1인칭일 것
+        -- 3. 적이 무적이 아니며 팀원이 아닐 것
+        local canTP = Toggles.TargetTP.Value 
+            and IsSelfFirstPerson() 
+            and IsTargetFirstPerson(CurrentTargetPlayer)
+
+        if canTP then
             local targetPos = CurrentTargetPart.Position
             local height = Options.TPHeight.Value
             local abovePos = targetPos + Vector3.new(0, height, 0)
@@ -270,14 +310,16 @@ RunService.Stepped:Connect(function(_, delta)
             hrp.AssemblyLinearVelocity = Vector3.zero
         end
 
-        -- 자동 사격 실행
+        -- 자동 발사 (텔레포트 상태가 아니어도 Silent Aim과 함께 사격 가능)
         if Toggles.AutoShoot.Value then
             TriggerAutoShoot()
         end
     end
 
     -- [Movement]
-    if Toggles.Fly.Value and not (Toggles.RageEnabled.Value and CurrentTargetPart and Toggles.TargetTP.Value and IsFirstPerson()) then
+    local isTPActive = Toggles.RageEnabled.Value and CurrentTargetPart and Toggles.TargetTP.Value and IsSelfFirstPerson() and CurrentTargetPlayer and IsTargetFirstPerson(CurrentTargetPlayer)
+    
+    if Toggles.Fly.Value and not isTPActive then
         hrp.AssemblyLinearVelocity = Vector3.zero
         local moveDir = Vector3.zero
         local speed = Options.FlySpeed.Value
@@ -305,7 +347,7 @@ RunService.Stepped:Connect(function(_, delta)
     end
 
     -- [Anti Aim]
-    if Toggles.AAEnabled.Value and not (Toggles.RageEnabled.Value and CurrentTargetPart and Toggles.TargetTP.Value and IsFirstPerson()) then
+    if Toggles.AAEnabled.Value and not isTPActive then
         local yaw = 0
         local pitch = 0
         local speed = Options.YawSpeed.Value
