@@ -47,14 +47,14 @@ CharGroup:AddSlider('BoostForce', {Text = 'Boost Power', Default = 3, Min = 1, M
 -- [Anti Aim 섹션]
 AAGroup:AddToggle('AAEnabled', {Text = 'Enable Anti Aim'})
 
--- Yaw 설정 (몸통 각도 제한 추가)
+-- Yaw 설정 (최대 180도까지 조절 가능)
 AAGroup:AddDropdown('YawMode', {
     Values = {'Static', 'Jitter', 'Random', 'Extended Random'},
     Default = 1,
     Multi = false,
     Text = 'Yaw Mode'
 })
-AAGroup:AddSlider('YawAngle', {Text = 'Torso Yaw Limit', Default = 30, Min = 0, Max = 90, Rounding = 0})
+AAGroup:AddSlider('YawAngle', {Text = 'Torso Yaw Limit', Default = 90, Min = 0, Max = 180, Rounding = 0})
 AAGroup:AddSlider('YawSpeed', {Text = 'Yaw Speed / Jitter Speed', Default = 10, Min = 1, Max = 50, Rounding = 0})
 
 -- Pitch 설정
@@ -67,6 +67,7 @@ AAGroup:AddDropdown('PitchMode', {
 AAGroup:AddSlider('PitchAngle', {Text = 'Pitch Angle (Static)', Default = 0, Min = -89, Max = 89, Rounding = 0})
 
 -- 관절 원본 상태 저장 변수
+local originalWaistC0 = nil
 local originalRootC0 = nil
 local originalNeckC0 = nil
 
@@ -111,20 +112,19 @@ RunService.RenderStepped:Connect(function(delta)
         hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (boost * delta))
     end
 
-    -- [4] Anti Aim (몸통 미세 회전 제어)
-    local rootJoint = hrp:FindFirstChild("RootJoint") or (char:FindFirstChild("LowerTorso") and char.LowerTorso:FindFirstChild("Root"))
-    local neck = (char:FindFirstChild("Torso") and char.Torso:FindFirstChild("Neck")) or (char:FindFirstChild("Head") and char.Head:FindFirstChild("Neck")) or (char:FindFirstChild("UpperTorso") and char.UpperTorso:FindFirstChild("Neck"))
+    -- [4] Anti Aim (상체 몸통만 분리하여 회전)
+    local upperTorso = char:FindFirstChild("UpperTorso")
+    local waist = upperTorso and upperTorso:FindFirstChild("Waist")
+    local rootJoint = hrp:FindFirstChild("RootJoint")
+    local neck = (char:FindFirstChild("Torso") and char.Torso:FindFirstChild("Neck")) or (char:FindFirstChild("Head") and char.Head:FindFirstChild("Neck")) or (upperTorso and upperTorso:FindFirstChild("Neck"))
 
-    if Toggles.AAEnabled.Value and rootJoint and neck then
-        if not originalRootC0 then originalRootC0 = rootJoint.C0 end
-        if not originalNeckC0 then originalNeckC0 = neck.C0 end
-
+    if Toggles.AAEnabled.Value then
         local yaw = 0
         local pitch = 0
         local speed = Options.YawSpeed.Value
         local yawLimit = Options.YawAngle.Value
 
-        -- Yaw 연산 (지정한 몸통 각도 범위 내에서만 작동)
+        -- Yaw 연산 (지정한 각도 범위 0~180도)
         local yMode = Options.YawMode.Value
         if yMode == 'Static' then
             yaw = math.rad(yawLimit)
@@ -133,7 +133,7 @@ RunService.RenderStepped:Connect(function(delta)
         elseif yMode == 'Random' then
             yaw = math.rad(math.random(-yawLimit, yawLimit))
         elseif yMode == 'Extended Random' then
-            yaw = math.rad(math.random(-yawLimit * 2, yawLimit * 2))
+            yaw = math.rad(math.random(-yawLimit, yawLimit))
         end
 
         -- Pitch 연산
@@ -150,9 +150,26 @@ RunService.RenderStepped:Connect(function(delta)
             pitch = math.rad(Options.PitchAngle.Value)
         end
 
-        rootJoint.C0 = originalRootC0 * CFrame.Angles(0, 0, yaw)
-        neck.C0 = originalNeckC0 * CFrame.Angles(pitch, 0, 0)
+        -- R15 상체(Waist) 모터 전용 회전 (하체/다리 완벽 고정)
+        if waist then
+            if not originalWaistC0 then originalWaistC0 = waist.C0 end
+            waist.C0 = originalWaistC0 * CFrame.Angles(pitch, yaw, 0)
+        -- R6 및 기타 백업 (축 쏠림 방지 정렬)
+        elseif rootJoint then
+            if not originalRootC0 then originalRootC0 = rootJoint.C0 end
+            rootJoint.C0 = originalRootC0 * CFrame.Angles(0, 0, yaw)
+        end
+
+        if neck then
+            if not originalNeckC0 then originalNeckC0 = neck.C0 end
+            neck.C0 = originalNeckC0 * CFrame.Angles(pitch, 0, 0)
+        end
     else
+        -- 비활성화 시 즉시 복구
+        if originalWaistC0 and waist then
+            waist.C0 = originalWaistC0
+            originalWaistC0 = nil
+        end
         if originalRootC0 and rootJoint then
             rootJoint.C0 = originalRootC0
             originalRootC0 = nil
