@@ -1,4 +1,4 @@
--- 1. 안전한 HttpGet 및 공식 LinoriaLib 로드
+-- 1. 라이브러리 불러오기
 local function SafeHttpGet(url)
     local success, result = pcall(function()
         return game:HttpGet(url, true)
@@ -9,16 +9,12 @@ end
 
 local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
 local libRaw = SafeHttpGet(repo .. 'Library.lua')
-local themeRaw = SafeHttpGet(repo .. 'addons/ThemeManager.lua')
-local saveRaw = SafeHttpGet(repo .. 'addons/SaveManager.lua')
 
-if not libRaw or not themeRaw or not saveRaw then
+if not libRaw then
     return warn("[Eclipse Core] 라이브러리 불러오기 실패.")
 end
 
 local Library = loadstring(libRaw)()
-local ThemeManager = loadstring(themeRaw)()
-local SaveManager = loadstring(saveRaw)()
 
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -54,7 +50,6 @@ local TargetGroup = Tabs.Main:AddRightGroupbox('Rage Target Settings')
 RageGroup:AddToggle('RageEnabled', {Text = 'Enable Rage Bot', Default = false})
 RageGroup:AddToggle('VoidSpam', {Text = 'Enable Void Spam', Default = false})
 
--- 실시간 타깃 확인 라벨
 local TargetStatusLabel = TargetGroup:AddLabel('Target Status: None')
 
 TargetGroup:AddToggle('TeamCheck', {Text = 'Team Check (팀전 게임에서만 ON)', Default = false})
@@ -69,7 +64,6 @@ TargetGroup:AddDropdown('TargetPart', {
 TargetGroup:AddSlider('TPHeight', {Text = 'TP Height Above Enemy', Default = 3, Min = 1, Max = 15, Rounding = 1})
 TargetGroup:AddSlider('RageRange', {Text = 'Max Detection Range', Default = 10000, Min = 100, Max = 99999, Rounding = 0})
 
--- Hide / Attack Time 조절 슬라이더
 TargetGroup:AddSlider('HideTime', {Text = 'Void Hide Time (Sec)', Default = 0.05, Min = 0.01, Max = 1, Rounding = 2})
 TargetGroup:AddSlider('AttackTime', {Text = 'Attack Time (Sec)', Default = 0.1, Min = 0.01, Max = 1, Rounding = 2})
 
@@ -108,7 +102,24 @@ AAGroup:AddDropdown('PitchMode', {
 })
 AAGroup:AddSlider('PitchAngle', {Text = 'Pitch Angle', Default = 0, Min = -180, Max = 180, Rounding = 0})
 
--- 3. 관절 캐싱
+-- 3. 상태 감지 함수 (UI 열림 & 1인칭 체크)
+local function IsUIOpen()
+    if Library.Toggled then return true end
+    if Library.ScreenGui and Library.ScreenGui.Enabled then return true end
+    return false
+end
+
+local function IsFirstPerson()
+    local char = LocalPlayer.Character
+    if not char then return false end
+    local head = char:FindFirstChild("Head")
+    if not head then return false end
+
+    -- 카메라와 머리의 거리가 1.5 Studs 이내일 때만 1인칭으로 판정
+    return (Camera.CFrame.Position - head.Position).Magnitude < 1.5
+end
+
+-- 4. 관절 캐싱
 local Cache = { waist = nil, rootJoint = nil, neck = nil }
 
 local function UpdateCache(character)
@@ -126,7 +137,7 @@ end
 if LocalPlayer.Character then UpdateCache(LocalPlayer.Character) end
 LocalPlayer.CharacterAdded:Connect(UpdateCache)
 
--- 4. 필터링 및 유효 적 검사
+-- 5. 필터링 및 유효 적 검사
 local function IsInvincibleOrImmune(character)
     if not character then return true end
     if character:FindFirstChildOfClass("ForceField") then return true end
@@ -179,7 +190,7 @@ local function GetValidTarget()
     return closestPart, closestPlayer
 end
 
--- 5. 하이엔드 360° Silent Aim
+-- 6. Silent Aim Metatable
 local rawMetatable = getrawmetatable(game)
 local oldNamecall = rawMetatable.__namecall
 local oldIndex = rawMetatable.__index
@@ -226,12 +237,12 @@ end)
 
 setreadonly(rawMetatable, true)
 
--- 6. 최적화된 자동 발사 (UI 열림 체크 추가)
+-- 7. 자동 발사 함수 (UI 켜짐 & 3인칭 조건 차단)
 local lastShootTime = 0
 
 local function BuffedAutoShoot(targetPart)
-    -- ★ UI 창이 화면에 열려있을 경우 발사 금지
-    if Library.Toggled then 
+    -- UI 열려있거나 1인칭이 아니면 사격 안 함
+    if IsUIOpen() or not IsFirstPerson() then 
         return 
     end
 
@@ -276,7 +287,7 @@ local function BuffedAutoShoot(targetPart)
     end)
 end
 
--- 7. 메인 프레임 루프
+-- 8. 메인 프레임 루프
 local voidState = "Attack"
 local lastStateChange = os.clock()
 
@@ -293,17 +304,15 @@ RunService.Heartbeat:Connect(function()
         return 
     end
 
-    -- 타깃 탐색
     CurrentTargetPart, CurrentTargetPlayer = GetValidTarget()
 
-    -- 실시간 UI 라벨 업데이트
     if CurrentTargetPlayer then
         TargetStatusLabel:SetText('Target Status: ' .. CurrentTargetPlayer.Name)
     else
         TargetStatusLabel:SetText('Target Status: None')
     end
 
-    -- [Rage Bot 동작]
+    -- [Rage Bot 및 Void Spam 발사 제어]
     if Toggles.RageEnabled.Value and CurrentTargetPart then
         local targetPos = CurrentTargetPart.Position
         local height = Options.TPHeight.Value
@@ -323,18 +332,20 @@ RunService.Heartbeat:Connect(function()
             end
 
             if voidState == "Hide" then
+                -- 숨는 동안은 절대로 사격 금지
                 hrp.CFrame = CFrame.new(0, -500, 0)
             else
+                -- 적 상공에 텔레포트된 Attack 순간에만 정밀 발사 실행
                 hrp.CFrame = CFrame.lookAt(abovePos, targetPos) * CFrame.Angles(math.rad(-90), 0, 0)
+                BuffedAutoShoot(CurrentTargetPart)
             end
         else
+            -- 일반 TP 공격 시 1인칭/UI 체크 후 발사
             hrp.CFrame = CFrame.lookAt(abovePos, targetPos) * CFrame.Angles(math.rad(-90), 0, 0)
+            BuffedAutoShoot(CurrentTargetPart)
         end
 
         hrp.AssemblyLinearVelocity = Vector3.zero
-        
-        -- UI가 닫혀있을 때만 자동 발사 실행
-        BuffedAutoShoot(CurrentTargetPart)
     end
 
     -- [Movement]
@@ -406,20 +417,8 @@ UserInputService.JumpRequest:Connect(function()
     end
 end)
 
--- Settings
-ThemeManager:SetLibrary(Library)
-SaveManager:SetLibrary(Library)
-
-SaveManager:IgnoreThemeSettings()
-SaveManager:SetIgnoreIndexes({})
-ThemeManager:SetFolder('EclipseCore')
-SaveManager:SetFolder('EclipseCore/configs')
-
+-- Settings 탭
 local LeftMenuGroup = Tabs.Settings:AddLeftGroupbox('System Control')
 LeftMenuGroup:AddButton('Unload Script', function() Library:Unload() end)
 LeftMenuGroup:AddLabel('Menu Toggle'):AddKeyPicker('MenuKeybind', { Default = 'RightControl', Text = 'Menu keybind', NoUI = true })
 Library.ToggleKeybind = Options.MenuKeybind
-
-SaveManager:BuildConfigSection(Tabs.Settings)
-ThemeManager:AddThemeSection(Tabs.Settings)
-ThemeManager:ApplyToTab(Tabs.Settings)
