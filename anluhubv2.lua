@@ -51,19 +51,8 @@ local Tabs = {
 local RageGroup = Tabs.Main:AddLeftGroupbox('360 Rage Bot')
 local TargetGroup = Tabs.Main:AddRightGroupbox('Rage Target Settings')
 
-RageGroup:AddToggle('RageEnabled', {
-    Text = 'Enable Rage Bot',
-    Default = false,
-    Callback = function(Value)
-        if Toggles.TargetTP then Toggles.TargetTP:SetValue(Value) end
-        if Toggles.SilentAim then Toggles.SilentAim:SetValue(Value) end
-        if Toggles.AutoShoot then Toggles.AutoShoot:SetValue(Value) end
-    end
-})
-
-RageGroup:AddToggle('TargetTP', {Text = 'TP Above Target (조건 만족 시)', Default = true})
-RageGroup:AddToggle('SilentAim', {Text = '360° Silent Aim', Default = true})
-RageGroup:AddToggle('AutoShoot', {Text = 'Auto Fire', Default = true})
+RageGroup:AddToggle('RageEnabled', {Text = 'Enable Rage Bot', Default = false})
+RageGroup:AddToggle('VoidSpam', {Text = 'Enable Void Spam', Default = false})
 
 TargetGroup:AddDropdown('TargetPart', {
     Values = {'Head', 'HumanoidRootPart', 'Torso'},
@@ -74,6 +63,10 @@ TargetGroup:AddDropdown('TargetPart', {
 
 TargetGroup:AddSlider('TPHeight', {Text = 'TP Height Above Enemy', Default = 3, Min = 1, Max = 15, Rounding = 1})
 TargetGroup:AddSlider('RageRange', {Text = 'Max Detection Range', Default = 10000, Min = 100, Max = 99999, Rounding = 0})
+
+-- Hide / Attack Time 조절 슬라이더 (0.01초 ~ 1.00초)
+TargetGroup:AddSlider('HideTime', {Text = 'Void Hide Time (Sec)', Default = 0.05, Min = 0.01, Max = 1, Rounding = 2})
+TargetGroup:AddSlider('AttackTime', {Text = 'Attack Time (Sec)', Default = 0.1, Min = 0.01, Max = 1, Rounding = 2})
 
 -- [Character 탭]
 local CharGroup = Tabs.Character:AddLeftGroupbox('Movement')
@@ -128,24 +121,7 @@ end
 if LocalPlayer.Character then UpdateCache(LocalPlayer.Character) end
 LocalPlayer.CharacterAdded:Connect(UpdateCache)
 
--- 4. 필터링 유틸리티 함수들
-
-local function IsSelfFirstPerson()
-    local char = LocalPlayer.Character
-    if not char then return false end
-    local head = char:FindFirstChild("Head")
-    if not head then return false end
-    return (Camera.CFrame.Position - head.Position).Magnitude < 2.5
-end
-
-local function IsTargetFirstPerson(player)
-    local char = player.Character
-    if not char then return false end
-    local head = char:FindFirstChild("Head")
-    if not head then return false end
-    return head.LocalTransparencyModifier >= 0.9 or head.Transparency >= 0.9
-end
-
+-- 4. 필터링 및 유효 적 검사
 local function IsInvincibleOrImmune(character)
     if not character then return true end
     if character:FindFirstChildOfClass("ForceField") then return true end
@@ -168,7 +144,6 @@ local function IsTeammate(player)
     return false
 end
 
--- 5. 조건 만족 전용 타깃 탐색 함수
 local CurrentTargetPart = nil
 local CurrentTargetPlayer = nil
 
@@ -201,7 +176,7 @@ local function GetValidTarget()
     return closestPart, closestPlayer
 end
 
--- 6. 하이엔드 360° Silent Aim
+-- 5. 하이엔드 360° Silent Aim
 local rawMetatable = getrawmetatable(game)
 local oldNamecall = rawMetatable.__namecall
 local oldIndex = rawMetatable.__index
@@ -211,7 +186,7 @@ rawMetatable.__namecall = newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
-    if not checkcaller() and Toggles.RageEnabled and Toggles.RageEnabled.Value and Toggles.SilentAim and Toggles.SilentAim.Value and CurrentTargetPart then
+    if not checkcaller() and Toggles.RageEnabled and Toggles.RageEnabled.Value and CurrentTargetPart then
         if method == "Raycast" and self == workspace then
             local origin = args[1]
             if origin then
@@ -234,7 +209,7 @@ rawMetatable.__namecall = newcclosure(function(self, ...)
 end)
 
 rawMetatable.__index = newcclosure(function(self, index)
-    if not checkcaller() and Toggles.RageEnabled and Toggles.RageEnabled.Value and Toggles.SilentAim and Toggles.SilentAim.Value and CurrentTargetPart then
+    if not checkcaller() and Toggles.RageEnabled and Toggles.RageEnabled.Value and CurrentTargetPart then
         if self == Mouse then
             if index == "Hit" then
                 return CurrentTargetPart.CFrame
@@ -248,53 +223,66 @@ end)
 
 setreadonly(rawMetatable, true)
 
--- 7. 직접 물리 마우스 클릭 트리거 함수
-local isShooting = false
-
-local function TriggerDirectMouseClick()
-    if isShooting then return end
-    isShooting = true
-
+-- 6. 버프된 초고속 자동 발사 (Super Fast Auto Shoot)
+local function BuffedAutoShoot(targetPart)
     task.spawn(function()
         local char = LocalPlayer.Character
-        if char then
-            local tool = char:FindFirstChildOfClass("Tool")
-            if tool then
-                tool:Activate()
+        if not char then return end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        local tool = char:FindFirstChildOfClass("Tool")
+        
+        -- 가방에서 자동 장착
+        if not tool and hum then
+            local backpackTool = LocalPlayer.Backpack:FindFirstChildOfClass("Tool")
+            if backpackTool then
+                hum:EquipTool(backpackTool)
+                tool = backpackTool
             end
         end
 
-        -- 방법 1: 실행기 네이티브 C-Level 클릭 입력 (mouse1press / mouse1release)
-        if mouse1press then
-            mouse1press()
-            task.wait(0.02)
-            pcall(mouse1release)
-        elseif mouse1click then
-            mouse1click()
+        if tool then
+            tool:Activate()
+            
+            -- 초고속 리모트 강제 트리거 (ACS/GunKit 바이패스)
+            for _, v in ipairs(tool:GetDescendants()) do
+                if v:IsA("RemoteEvent") then
+                    pcall(function()
+                        if targetPart then
+                            v:FireServer(targetPart.Position, targetPart)
+                            v:FireServer(targetPart)
+                        end
+                        v:FireServer()
+                    end)
+                end
+            end
         end
 
-        -- 방법 2: VirtualUser를 통한 직접 마우스 클릭
+        -- 물리 C-Level 연사
+        pcall(function()
+            if mouse1press then
+                mouse1press()
+                mouse1release()
+            end
+        end)
+
         pcall(function()
             VirtualUser:CaptureController()
             VirtualUser:Button1Down(Vector2.zero)
-            task.wait(0.02)
             VirtualUser:Button1Up(Vector2.zero)
         end)
 
-        -- 방법 3: VirtualInputManager 화면 중앙 마우스 클릭 이벤트 주입
         pcall(function()
             local vp = Camera.ViewportSize
             VirtualInputManager:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, true, game, 0)
-            task.wait(0.02)
             VirtualInputManager:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, false, game, 0)
         end)
-
-        task.wait(0.03)
-        isShooting = false
     end)
 end
 
--- 8. 메인 프레임 루프
+-- 7. 메인 프레임 루프 (타이머 기반 Void Spam)
+local voidState = "Attack"
+local lastStateChange = os.clock()
+
 RunService.Stepped:Connect(function(_, delta)
     local char = LocalPlayer.Character
     if not char then return end
@@ -302,34 +290,51 @@ RunService.Stepped:Connect(function(_, delta)
     local hum = char:FindFirstChild("Humanoid")
     if not hrp or not hum or hum.Health <= 0 then return end
 
-    -- 유효한 적 타깃 찾기
+    -- 타깃 탐색
     CurrentTargetPart, CurrentTargetPlayer = GetValidTarget()
 
-    -- [Rage Bot 실행 조건]
-    if Toggles.RageEnabled.Value and CurrentTargetPart and CurrentTargetPlayer then
-        local canTP = Toggles.TargetTP.Value 
-            and IsSelfFirstPerson() 
-            and IsTargetFirstPerson(CurrentTargetPlayer)
+    -- [Rage Bot 동작]
+    if Toggles.RageEnabled.Value and CurrentTargetPart then
+        local targetPos = CurrentTargetPart.Position
+        local height = Options.TPHeight.Value
+        local abovePos = targetPos + Vector3.new(0, height, 0)
 
-        if canTP then
-            local targetPos = CurrentTargetPart.Position
-            local height = Options.TPHeight.Value
-            local abovePos = targetPos + Vector3.new(0, height, 0)
+        if Toggles.VoidSpam.Value then
+            local now = os.clock()
+            local hideTime = Options.HideTime.Value
+            local attackTime = Options.AttackTime.Value
 
+            -- 시간 단위 상태 전환
+            if voidState == "Attack" and (now - lastStateChange >= attackTime) then
+                voidState = "Hide"
+                lastStateChange = now
+            elseif voidState == "Hide" and (now - lastStateChange >= hideTime) then
+                voidState = "Attack"
+                lastStateChange = now
+            end
+
+            if voidState == "Hide" then
+                -- 보이드 위치로 텔레포트
+                hrp.CFrame = CFrame.new(0, -500, 0)
+            else
+                -- 적 상공 위치로 텔레포트
+                hrp.CFrame = CFrame.lookAt(abovePos, targetPos) * CFrame.Angles(math.rad(-90), 0, 0)
+            end
+        else
+            -- 일반 상공 TP
             hrp.CFrame = CFrame.lookAt(abovePos, targetPos) * CFrame.Angles(math.rad(-90), 0, 0)
-            hrp.AssemblyLinearVelocity = Vector3.zero
         end
 
-        -- 직접 마우스 클릭 실행
-        if Toggles.AutoShoot.Value then
-            TriggerDirectMouseClick()
-        end
+        hrp.AssemblyLinearVelocity = Vector3.zero
+
+        -- 자동 발사 (버프된 초고속 발사)
+        BuffedAutoShoot(CurrentTargetPart)
     end
 
     -- [Movement]
-    local isTPActive = Toggles.RageEnabled.Value and CurrentTargetPart and Toggles.TargetTP.Value and IsSelfFirstPerson() and CurrentTargetPlayer and IsTargetFirstPerson(CurrentTargetPlayer)
+    local isRageActive = Toggles.RageEnabled.Value and CurrentTargetPart
     
-    if Toggles.Fly.Value and not isTPActive then
+    if Toggles.Fly.Value and not isRageActive then
         hrp.AssemblyLinearVelocity = Vector3.zero
         local moveDir = Vector3.zero
         local speed = Options.FlySpeed.Value
@@ -357,7 +362,7 @@ RunService.Stepped:Connect(function(_, delta)
     end
 
     -- [Anti Aim]
-    if Toggles.AAEnabled.Value and not isTPActive then
+    if Toggles.AAEnabled.Value and not isRageActive then
         local yaw = 0
         local pitch = 0
         local speed = Options.YawSpeed.Value
