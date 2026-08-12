@@ -28,25 +28,48 @@ local Tabs = {
     Settings = Window:AddTab('Settings'),
 }
 
--- 3. Character 탭 구성
+-- 3. Character 탭 구성 (좌측: 이동, 우측: Anti Aim)
 local CharGroup = Tabs.Character:AddLeftGroupbox('Movement')
+local AAGroup = Tabs.Character:AddRightGroupbox('Anti Aim')
 
--- Fly
+-- [Movement 섹션]
 CharGroup:AddToggle('Fly', {Text = 'Fly (Space: 상승 / Shift: 하강)'})
 CharGroup:AddSlider('FlySpeed', {Text = 'Fly Speed', Default = 50, Min = 10, Max = 200, Rounding = 0})
 
--- Speed Hack
 CharGroup:AddToggle('SpeedEnabled', {Text = 'Speed Hack'})
 CharGroup:AddSlider('WalkSpeed', {Text = 'Speed Multiplier', Default = 2, Min = 1, Max = 10, Rounding = 1})
 
--- Infinite Jump
 CharGroup:AddToggle('JumpEnabled', {Text = 'Infinite Jump'})
 
--- Slide Boost
 CharGroup:AddToggle('SlideBoost', {Text = 'Slide Boost'})
 CharGroup:AddSlider('BoostForce', {Text = 'Boost Power', Default = 3, Min = 1, Max = 10, Rounding = 1})
 
--- 4. 부드러운 CFrame 기반 메인 무브먼트 로직
+-- [Anti Aim 섹션]
+AAGroup:AddToggle('AAEnabled', {Text = 'Enable Anti Aim'})
+
+-- Yaw 설정
+AAGroup:AddDropdown('YawMode', {
+    Values = {'Static', 'Spin', 'Random', 'Extended Random'},
+    Default = 1,
+    Multi = false,
+    Text = 'Yaw Mode'
+})
+AAGroup:AddSlider('YawSpeed', {Text = 'Yaw Speed / Jitter', Default = 10, Min = 1, Max = 50, Rounding = 0})
+
+-- Pitch 설정
+AAGroup:AddDropdown('PitchMode', {
+    Values = {'Static', 'Up', 'Down', 'Random', 'Extended Random'},
+    Default = 1,
+    Multi = false,
+    Text = 'Pitch Mode'
+})
+AAGroup:AddSlider('PitchAngle', {Text = 'Pitch Angle (Static)', Default = 0, Min = -89, Max = 89, Rounding = 0})
+
+-- 관절 원본 상태 저장 변수
+local originalRootC0 = nil
+local originalNeckC0 = nil
+
+-- 4. 메인 루프 (Movement + Anti Aim)
 RunService.RenderStepped:Connect(function(delta)
     local char = LocalPlayer.Character
     if not char then return end
@@ -54,10 +77,9 @@ RunService.RenderStepped:Connect(function(delta)
     local hum = char:FindFirstChild("Humanoid")
     if not hrp or not hum then return end
 
-    -- [1] CFrame Fly (중력 완벽 무시, 방향 조작)
+    -- [1] Fly
     if Toggles.Fly.Value then
-        hrp.AssemblyLinearVelocity = Vector3.zero -- 중력으로 떨어지는 힘 제거
-        
+        hrp.AssemblyLinearVelocity = Vector3.zero
         local cam = workspace.CurrentCamera
         local moveDir = Vector3.zero
         local speed = Options.FlySpeed.Value
@@ -74,7 +96,7 @@ RunService.RenderStepped:Connect(function(delta)
         end
     end
 
-    -- [2] CFrame Speed Hack (뚝뚝 끊기지 않는 부드러운 가속)
+    -- [2] Speed Hack
     if Toggles.SpeedEnabled.Value and not Toggles.Fly.Value then
         if hum.MoveDirection.Magnitude > 0 then
             local extraSpeed = (Options.WalkSpeed.Value - 1) * 16
@@ -82,21 +104,71 @@ RunService.RenderStepped:Connect(function(delta)
         end
     end
 
-    -- [3] Slide Boost (속도 누적 제어 및 안정화)
+    -- [3] Slide Boost
     if Toggles.SlideBoost.Value and not Toggles.Fly.Value and hum.MoveDirection.Magnitude > 0 then
         local boost = Options.BoostForce.Value * 5
         hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (boost * delta))
     end
+
+    -- [4] Anti Aim (머리 & 몸통 관절 회전)
+    local rootJoint = hrp:FindFirstChild("RootJoint") or (char:FindFirstChild("LowerTorso") and char.LowerTorso:FindFirstChild("Root"))
+    local neck = (char:FindFirstChild("Torso") and char.Torso:FindFirstChild("Neck")) or (char:FindFirstChild("Head") and char.Head:FindFirstChild("Neck")) or (char:FindFirstChild("UpperTorso") and char.UpperTorso:FindFirstChild("Neck"))
+
+    if Toggles.AAEnabled.Value and rootJoint and neck then
+        -- 원본 C0 저장
+        if not originalRootC0 then originalRootC0 = rootJoint.C0 end
+        if not originalNeckC0 then originalNeckC0 = neck.C0 end
+
+        local yaw = 0
+        local pitch = 0
+        local speed = Options.YawSpeed.Value
+
+        -- Yaw 연산 (가로 회전)
+        local yMode = Options.YawMode.Value
+        if yMode == 'Spin' then
+            yaw = math.rad((tick() * speed * 50) % 360)
+        elseif yMode == 'Random' then
+            yaw = math.rad(math.random(-180, 180))
+        elseif yMode == 'Extended Random' then
+            yaw = math.rad(math.random(-360, 360))
+        end
+
+        -- Pitch 연산 (세로 꺾임)
+        local pMode = Options.PitchMode.Value
+        if pMode == 'Up' then
+            pitch = math.rad(-89)
+        elseif pMode == 'Down' then
+            pitch = math.rad(89)
+        elseif pMode == 'Random' then
+            pitch = math.rad(math.random(-89, 89))
+        elseif pMode == 'Extended Random' then
+            pitch = math.rad(math.random(-180, 180))
+        elseif pMode == 'Static' then
+            pitch = math.rad(Options.PitchAngle.Value)
+        end
+
+        -- 몸통(RootJoint)과 머리(Neck)에만 회전 값 적용
+        rootJoint.C0 = originalRootC0 * CFrame.Angles(0, 0, yaw)
+        neck.C0 = originalNeckC0 * CFrame.Angles(pitch, 0, 0)
+    else
+        -- Anti-Aim 비활성화 시 원본 상태로 복구
+        if originalRootC0 and rootJoint then
+            rootJoint.C0 = originalRootC0
+            originalRootC0 = nil
+        end
+        if originalNeckC0 and neck then
+            neck.C0 = originalNeckC0
+            originalNeckC0 = nil
+        end
+    end
 end)
 
--- [4] Infinite Jump (무한 점프)
+-- 무한 점프
 UserInputService.JumpRequest:Connect(function()
     if Toggles.JumpEnabled.Value then
         local char = LocalPlayer.Character
         local hum = char and char:FindFirstChild("Humanoid")
-        if hum then
-            hum:ChangeState(Enum.HumanoidStateType.Jumping)
-        end
+        if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
     end
 end)
 
