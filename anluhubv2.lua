@@ -1,4 +1,4 @@
--- 1. 안전한 HttpGet (타임아웃 방지)
+-- 1. 안전한 HttpGet
 local function SafeHttpGet(url)
     local success, result = pcall(function()
         return game:HttpGet(url, true)
@@ -13,7 +13,7 @@ local themeRaw = SafeHttpGet('https://raw.githubusercontent.com/violin-suzutsuki
 local saveRaw = SafeHttpGet('https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/addons/SaveManager.lua')
 
 if not libRaw or not themeRaw or not saveRaw then
-    return warn("[Eclipse Core] 라이브러리 불러오기 실패. 잠시 후 다시 시도해 주세요.")
+    return warn("[Eclipse Core] 라이브러리 불러오기 실패.")
 end
 
 local Library = loadstring(libRaw)()
@@ -24,6 +24,8 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+local Mouse = LocalPlayer:GetMouse()
 
 -- 2. UI 구성
 local Window = Library:CreateWindow({
@@ -43,10 +45,28 @@ local Tabs = {
     Settings = Window:AddTab('Settings'),
 }
 
+-- [Main 탭] Rage Bot 구성
+local RageGroup = Tabs.Main:AddLeftGroupbox('360 Rage Bot')
+local TargetGroup = Tabs.Main:AddRightGroupbox('Rage Target Settings')
+
+RageGroup:AddToggle('RageEnabled', {Text = 'Enable Rage Bot'})
+RageGroup:AddToggle('TargetTP', {Text = 'TP Above Target (적 위 텔레포트)', Default = true})
+RageGroup:AddToggle('SilentAim', {Text = '360° Silent Aim', Default = true})
+RageGroup:AddToggle('AutoShoot', {Text = 'Auto Fire', Default = true})
+
+TargetGroup:AddDropdown('TargetPart', {
+    Values = {'Head', 'HumanoidRootPart', 'Torso'},
+    Default = 1,
+    Multi = false,
+    Text = 'Target Part'
+})
+TargetGroup:AddSlider('TPHeight', {Text = 'TP Height Above Enemy', Default = 10, Min = 3, Max = 30, Rounding = 0})
+TargetGroup:AddSlider('RageRange', {Text = 'Max Detection Range', Default = 500, Min = 50, Max = 2000, Rounding = 0})
+
+-- [Character 탭]
 local CharGroup = Tabs.Character:AddLeftGroupbox('Movement')
 local AAGroup = Tabs.Character:AddRightGroupbox('Anti Aim')
 
--- Movement
 CharGroup:AddToggle('Fly', {Text = 'Fly (Space: 상승 / Shift: 하강)'})
 CharGroup:AddSlider('FlySpeed', {Text = 'Fly Speed', Default = 50, Min = 10, Max = 200, Rounding = 0})
 
@@ -58,7 +78,7 @@ CharGroup:AddToggle('JumpEnabled', {Text = 'Infinite Jump'})
 CharGroup:AddToggle('SlideBoost', {Text = 'Slide Boost'})
 CharGroup:AddSlider('BoostForce', {Text = 'Boost Power', Default = 3, Min = 1, Max = 10, Rounding = 1})
 
--- Anti Aim
+-- Anti Aim UI
 AAGroup:AddToggle('AAEnabled', {Text = 'Enable Anti Aim'})
 
 AAGroup:AddDropdown('YawMode', {
@@ -78,67 +98,119 @@ AAGroup:AddDropdown('PitchMode', {
 })
 AAGroup:AddSlider('PitchAngle', {Text = 'Pitch Angle', Default = 0, Min = -180, Max = 180, Rounding = 0})
 
--- 3. 캐싱 및 관절 보호
-local Cache = {
-    char = nil, hrp = nil, hum = nil,
-    waist = nil, rootJoint = nil, neck = nil,
-    leftHip = nil, rightHip = nil,
-    origWaistC0 = nil, origRootC0 = nil, origNeckC0 = nil,
-    origLeftHipC0 = nil, origRightHipC0 = nil
-}
-
-local function ResetJoints()
-    if Cache.waist and Cache.origWaistC0 then Cache.waist.C0 = Cache.origWaistC0 end
-    if Cache.rootJoint and Cache.origRootC0 then Cache.rootJoint.C0 = Cache.origRootC0 end
-    if Cache.neck and Cache.origNeckC0 then Cache.neck.C0 = Cache.origNeckC0 end
-    if Cache.leftHip and Cache.origLeftHipC0 then Cache.leftHip.C0 = Cache.origLeftHipC0 end
-    if Cache.rightHip and Cache.origRightHipC0 then Cache.rightHip.C0 = Cache.origRightHipC0 end
-end
+-- 3. 관절 캐싱
+local Cache = { waist = nil, rootJoint = nil, neck = nil }
 
 local function UpdateCache(character)
-    ResetJoints()
-    if not character then return end
-    Cache.char = character
-    Cache.hrp = character:WaitForChild("HumanoidRootPart", 3)
-    Cache.hum = character:WaitForChild("Humanoid", 3)
-    if not Cache.hrp or not Cache.hum then return end
+    if not character then Cache.waist = nil Cache.rootJoint = nil Cache.neck = nil return end
 
-    local upperTorso = character:FindFirstChild("UpperTorso")
+    local upperTorso = character:WaitForChild("UpperTorso", 3) or character:FindFirstChild("UpperTorso")
+    local hrp = character:WaitForChild("HumanoidRootPart", 3) or character:FindFirstChild("HumanoidRootPart")
     local torso = character:FindFirstChild("Torso")
 
     Cache.waist = upperTorso and upperTorso:FindFirstChild("Waist")
-    Cache.rootJoint = Cache.hrp:FindFirstChild("RootJoint")
+    Cache.rootJoint = hrp and hrp:FindFirstChild("RootJoint")
     Cache.neck = (torso and torso:FindFirstChild("Neck")) or (character:FindFirstChild("Head") and character.Head:FindFirstChild("Neck")) or (upperTorso and upperTorso:FindFirstChild("Neck"))
-    Cache.leftHip = torso and torso:FindFirstChild("Left Hip")
-    Cache.rightHip = torso and torso:FindFirstChild("Right Hip")
-
-    if Cache.waist then Cache.origWaistC0 = Cache.waist.C0 end
-    if Cache.rootJoint then Cache.origRootC0 = Cache.rootJoint.C0 end
-    if Cache.neck then Cache.origNeckC0 = Cache.neck.C0 end
-    if Cache.leftHip then Cache.origLeftHipC0 = Cache.leftHip.C0 end
-    if Cache.rightHip then Cache.origRightHipC0 = Cache.rightHip.C0 end
 end
 
 if LocalPlayer.Character then UpdateCache(LocalPlayer.Character) end
 LocalPlayer.CharacterAdded:Connect(UpdateCache)
 
--- 4. 메인 프레임 루프 (부드러운 상체 회전 연산)
-RunService.RenderStepped:Connect(function(delta)
-    local hrp = Cache.hrp
-    local hum = Cache.hum
+-- 4. 360도 전방위 적 탐색 함수 (3D World Space)
+local CurrentTargetPart = nil
+
+local function Get360Target()
+    if not Toggles.RageEnabled.Value then return nil end
+    local maxDistance = Options.RageRange.Value
+    local closestTarget = nil
+    local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not myHRP then return nil end
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            -- 팀 체크 (필요 시 주석 해제)
+            -- if player.Team == LocalPlayer.Team then continue end
+
+            local hum = player.Character:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                local partName = Options.TargetPart.Value
+                local targetPart = player.Character:FindFirstChild(partName) or player.Character:FindFirstChild("HumanoidRootPart")
+                
+                if targetPart then
+                    local dist = (targetPart.Position - myHRP.Position).Magnitude
+                    if dist <= maxDistance then
+                        maxDistance = dist
+                        closestTarget = targetPart
+                    end
+                end
+            end
+        end
+    end
+    return closestTarget
+end
+
+-- 5. Silent Aim 메타테이블 후킹 (Mouse.Hit / Target 조준 연동)
+local rawMetatable = getrawmetatable(game)
+local oldIndex = rawMetatable.__index
+setreadonly(rawMetatable, false)
+
+rawMetatable.__index = newcclosure(function(self, index)
+    if not checkcaller() and Toggles.RageEnabled.Value and Toggles.SilentAim.Value and CurrentTargetPart then
+        if self == Mouse then
+            if index == "Hit" then
+                return CurrentTargetPart.CFrame
+            elseif index == "Target" then
+                return CurrentTargetPart
+            end
+        end
+    end
+    return oldIndex(self, index)
+end)
+
+setreadonly(rawMetatable, true)
+
+-- 6. 메인 프레임 루프 (Stepped: 위치 / 이동 / TP 처리)
+RunService.Stepped:Connect(function(_, delta)
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChild("Humanoid")
     if not hrp or not hum or hum.Health <= 0 then return end
 
-    -- [1] Fly
-    if Toggles.Fly.Value then
+    -- 타깃 탐색
+    CurrentTargetPart = Get360Target()
+
+    -- [Rage Bot: 적 상공 TP & 땅 보고 눕는 자세]
+    if Toggles.RageEnabled.Value and CurrentTargetPart then
+        if Toggles.TargetTP.Value then
+            local targetPos = CurrentTargetPart.Position
+            local height = Options.TPHeight.Value
+            local abovePos = targetPos + Vector3.new(0, height, 0)
+
+            -- 적을 바라보면서 피치 -90도로 공중에 눕는 CFrame 적용
+            hrp.CFrame = CFrame.lookAt(abovePos, targetPos) * CFrame.Angles(math.rad(-90), 0, 0)
+            hrp.AssemblyLinearVelocity = Vector3.zero -- 중력 대기
+        end
+
+        -- 자동 사격
+        if Toggles.AutoShoot.Value then
+            local tool = char:FindFirstChildOfClass("Tool")
+            if tool then
+                tool:Activate()
+            end
+        end
+    end
+
+    -- [Movement]
+    if Toggles.Fly.Value and not (Toggles.RageEnabled.Value and CurrentTargetPart and Toggles.TargetTP.Value) then
         hrp.AssemblyLinearVelocity = Vector3.zero
-        local cam = workspace.CurrentCamera
         local moveDir = Vector3.zero
         local speed = Options.FlySpeed.Value
 
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir += cam.CFrame.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir -= cam.CFrame.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir += cam.CFrame.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir -= cam.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir += Camera.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir -= Camera.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir += Camera.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir -= Camera.CFrame.RightVector end
         if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDir += Vector3.new(0, 1, 0) end
         if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir -= Vector3.new(0, 1, 0) end
 
@@ -147,68 +219,56 @@ RunService.RenderStepped:Connect(function(delta)
         end
     end
 
-    -- [2] Speed Hack
     if Toggles.SpeedEnabled.Value and not Toggles.Fly.Value and hum.MoveDirection.Magnitude > 0 then
         local extraSpeed = (Options.WalkSpeed.Value - 1) * 16
         hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (extraSpeed * delta))
     end
 
-    -- [3] Slide Boost
     if Toggles.SlideBoost.Value and not Toggles.Fly.Value and hum.MoveDirection.Magnitude > 0 then
         local boost = Options.BoostForce.Value * 5
         hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (boost * delta))
     end
 
-    -- [4] Anti Aim (상체만 독립 회전 / 다리 완전 고정)
-    if Toggles.AAEnabled.Value then
+    -- [Anti Aim (Rage Bot TP 미작동 시 적용)]
+    if Toggles.AAEnabled.Value and not (Toggles.RageEnabled.Value and CurrentTargetPart and Toggles.TargetTP.Value) then
         local yaw = 0
         local pitch = 0
         local speed = Options.YawSpeed.Value
         local yawLimit = Options.YawAngle.Value
 
-        -- Yaw 연산 (0 ~ 180도)
         local yMode = Options.YawMode.Value
         if yMode == 'Static' then yaw = math.rad(yawLimit)
         elseif yMode == 'Jitter' then yaw = math.rad(math.sin(tick() * speed) * yawLimit)
         elseif yMode == 'Random' then yaw = math.rad(math.random(-yawLimit, yawLimit))
         elseif yMode == 'Spin' then yaw = math.rad((tick() * speed * 50) % 360) end
 
-        -- Pitch 연산 (-180 ~ 180도)
         local pMode = Options.PitchMode.Value
         if pMode == 'Up' then pitch = math.rad(-180)
         elseif pMode == 'Down' then pitch = math.rad(180)
         elseif pMode == 'Random' then pitch = math.rad(math.random(-180, 180))
         elseif pMode == 'Static' then pitch = math.rad(Options.PitchAngle.Value) end
 
-        -- R15 상체 회전
-        if Cache.waist and Cache.origWaistC0 then
-            Cache.waist.C0 = Cache.origWaistC0 * CFrame.Angles(pitch, yaw, 0)
-        -- R6 상체 회전 + 다리 보정
-        elseif Cache.rootJoint and Cache.origRootC0 then
-            Cache.rootJoint.C0 = Cache.origRootC0 * CFrame.Angles(0, 0, yaw)
-            if Cache.leftHip and Cache.rightHip and Cache.origLeftHipC0 and Cache.origRightHipC0 then
-                local counterMatrix = (Cache.rootJoint.C0:Inverse() * Cache.origRootC0)
-                Cache.leftHip.C0 = counterMatrix * Cache.origLeftHipC0
-                Cache.rightHip.C0 = counterMatrix * Cache.origRightHipC0
-            end
+        if Cache.waist then
+            Cache.waist.Transform = CFrame.Angles(pitch, yaw, 0)
+        elseif Cache.rootJoint then
+            Cache.rootJoint.Transform = CFrame.Angles(pitch, 0, yaw)
         end
 
-        if Cache.neck and Cache.origNeckC0 then
-            Cache.neck.C0 = Cache.origNeckC0 * CFrame.Angles(pitch, 0, 0)
+        if Cache.neck then
+            Cache.neck.Transform = CFrame.Angles(pitch, 0, 0)
         end
-    else
-        ResetJoints()
     end
 end)
 
 -- 무한 점프
 UserInputService.JumpRequest:Connect(function()
-    if Toggles.JumpEnabled.Value and Cache.hum then
-        Cache.hum:ChangeState(Enum.HumanoidStateType.Jumping)
+    if Toggles.JumpEnabled.Value and LocalPlayer.Character then
+        local hum = LocalPlayer.Character:FindFirstChild("Humanoid")
+        if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
     end
 end)
 
--- 5. Settings 설정
+-- Settings
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
 
