@@ -69,7 +69,7 @@ TargetGroup:AddDropdown('TargetPart', {
 TargetGroup:AddSlider('TPHeight', {Text = 'TP Height Above Enemy', Default = 3, Min = 1, Max = 15, Rounding = 1})
 TargetGroup:AddSlider('RageRange', {Text = 'Max Detection Range', Default = 10000, Min = 100, Max = 99999, Rounding = 0})
 
--- Hide / Attack Time 조절 슬라이더 (0.01초 ~ 1.00초)
+-- Hide / Attack Time 조절 슬라이더
 TargetGroup:AddSlider('HideTime', {Text = 'Void Hide Time (Sec)', Default = 0.05, Min = 0.01, Max = 1, Rounding = 2})
 TargetGroup:AddSlider('AttackTime', {Text = 'Attack Time (Sec)', Default = 0.1, Min = 0.01, Max = 1, Rounding = 2})
 
@@ -126,7 +126,7 @@ end
 if LocalPlayer.Character then UpdateCache(LocalPlayer.Character) end
 LocalPlayer.CharacterAdded:Connect(UpdateCache)
 
--- 4. 필터링 및 유효 적 검사 (수정완료)
+-- 4. 필터링 및 유효 적 검사
 local function IsInvincibleOrImmune(character)
     if not character then return true end
     if character:FindFirstChildOfClass("ForceField") then return true end
@@ -139,7 +139,6 @@ end
 
 local function IsTeammate(player)
     if player == LocalPlayer then return true end
-    -- Team Check 토글이 켜져있을 때만 팀원 판정
     if Toggles.TeamCheck and Toggles.TeamCheck.Value then
         if LocalPlayer.Team ~= nil and player.Team ~= nil then
             return player.Team == LocalPlayer.Team
@@ -227,10 +226,15 @@ end)
 
 setreadonly(rawMetatable, true)
 
--- 6. 최적화된 자동 발사
+-- 6. 최적화된 자동 발사 (UI 열림 체크 추가)
 local lastShootTime = 0
 
 local function BuffedAutoShoot(targetPart)
+    -- ★ UI 창이 화면에 열려있을 경우 발사 금지
+    if Library.Toggled then 
+        return 
+    end
+
     local now = os.clock()
     if now - lastShootTime < 0.03 then return end
     lastShootTime = now
@@ -272,7 +276,7 @@ local function BuffedAutoShoot(targetPart)
     end)
 end
 
--- 7. 메인 프레임 루프 (Heartbeat 기반 안정적 동작)
+-- 7. 메인 프레임 루프
 local voidState = "Attack"
 local lastStateChange = os.clock()
 
@@ -328,6 +332,8 @@ RunService.Heartbeat:Connect(function()
         end
 
         hrp.AssemblyLinearVelocity = Vector3.zero
+        
+        -- UI가 닫혀있을 때만 자동 발사 실행
         BuffedAutoShoot(CurrentTargetPart)
     end
 
@@ -411,7 +417,7 @@ SaveManager:SetFolder('EclipseCore/configs')
 
 local LeftMenuGroup = Tabs.Settings:AddLeftGroupbox('System Control')
 LeftMenuGroup:AddButton('Unload Script', function() Library:Unload() end)
-LeftMenuGroup:AddLabel('Menu Toggle'):AddKeyPicker('MenuKeybind', { Default = 'Right', Text = 'Menu keybind', NoUI = true })
+LeftMenuGroup:AddLabel('Menu Toggle'):AddKeyPicker('MenuKeybind', { Default = 'RightControl', Text = 'Menu keybind', NoUI = true })
 Library.ToggleKeybind = Options.MenuKeybind
 
 SaveManager:BuildConfigSection(Tabs.Settings)
