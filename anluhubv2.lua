@@ -130,11 +130,13 @@ oldInput = hookfunction(inputFunc, function(...)
             }
         end
         
-        -- [Rage 모드 활성화: Rapid Fire, No Spread, Rapid Melee]
+        -- [Rage 모드 활성화: Rapid Fire, No Spread, Rapid Melee, Bullet Velocity]
         info.ShootRecoil = 0
         info.ShootSpread = 0
         info.ShootCooldown = 0
         info.QuickShotCooldown = 0
+        info.ProjectileSpeed = 99999 -- 탄속 최대화 (즉시 명중)
+        info.BulletVelocity = 99999 -- 탄속 최대화 (즉시 명중)
         
     elseif OriginalStats and type(args[1]) == "table" and args[1].Info then
         -- Rage Bot이 꺼져 있으면 원본 스탯으로 복구
@@ -390,6 +392,9 @@ RunService.Heartbeat:Connect(function()
         local targetPos = CurrentTargetPart.Position
         local height = Options.TPHeight.Value
         local abovePos = targetPos + Vector3.new(0, height, 0)
+
+        -- [카메라 락온 추가: 적을 정확히 조준]
+        Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, targetPos)
 
         if Toggles.VoidSpam.Value then
             local now = os.clock()
