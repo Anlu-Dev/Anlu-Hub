@@ -50,6 +50,10 @@ local TargetGroup = Tabs.Main:AddRightGroupbox('Rage Target Settings')
 RageGroup:AddToggle('RageEnabled', {Text = 'Enable Rage Bot', Default = false})
 RageGroup:AddToggle('VoidSpam', {Text = 'Enable Void Spam', Default = false})
 
+-- 3인칭 & 커서 상태 제어 옵션
+RageGroup:AddToggle('Disable3rdPerson', {Text = '3인칭일 때 자동발사 끄기', Default = true})
+RageGroup:AddToggle('DisableUnlockedCursor', {Text = '커서 풀렸을 때 자동발사 끄기', Default = true})
+
 local TargetStatusLabel = TargetGroup:AddLabel('Target Status: None')
 
 TargetGroup:AddToggle('TeamCheck', {Text = 'Team Check (팀전 게임에서만 ON)', Default = false})
@@ -102,21 +106,41 @@ AAGroup:AddDropdown('PitchMode', {
 })
 AAGroup:AddSlider('PitchAngle', {Text = 'Pitch Angle', Default = 0, Min = -180, Max = 180, Rounding = 0})
 
--- 3. 상태 감지 함수 (UI 열림 & 1인칭 체크)
-local function IsUIOpen()
-    if Library.Toggled then return true end
-    if Library.ScreenGui and Library.ScreenGui.Enabled then return true end
-    return false
-end
+-- 3. 자동 사격 조건 정밀 검증 함수
+local function CanAutoShoot()
+    -- 1. UI 창이 켜져 있을 때 차단
+    if Library.Toggled then return false end
+    if Library.ScreenGui and Library.ScreenGui.Enabled then return false end
 
-local function IsFirstPerson()
-    local char = LocalPlayer.Character
-    if not char then return false end
-    local head = char:FindFirstChild("Head")
-    if not head then return false end
+    -- 2. 채팅창 등 텍스트 박스 입력 중일 때 차단
+    if UserInputService:GetFocusedTextBox() ~= nil then return false end
 
-    -- 카메라와 머리의 거리가 1.5 Studs 이내일 때만 1인칭으로 판정
-    return (Camera.CFrame.Position - head.Position).Magnitude < 1.5
+    -- 3. 마우스 커서가 화면에 자유롭게 풀려 있을 때 차단
+    if Toggles.DisableUnlockedCursor and Toggles.DisableUnlockedCursor.Value then
+        if UserInputService.MouseBehavior == Enum.MouseBehavior.Default then
+            return false
+        end
+    end
+
+    -- 4. 카메라 시점이 3인칭일 때 차단
+    if Toggles.Disable3rdPerson and Toggles.Disable3rdPerson.Value then
+        local char = LocalPlayer.Character
+        if char then
+            local head = char:FindFirstChild("Head")
+            if head then
+                local camDist = (Camera.CFrame.Position - head.Position).Magnitude
+                if camDist > 2.2 then -- 카메라와 머리 거리가 2.2 Studs 이상이면 3인칭
+                    return false
+                end
+            end
+        end
+        -- Shift Lock이 해제된 3인칭 상태 감지
+        if UserInputService.MouseBehavior == Enum.MouseBehavior.Default then
+            return false
+        end
+    end
+
+    return true
 end
 
 -- 4. 관절 캐싱
@@ -190,7 +214,7 @@ local function GetValidTarget()
     return closestPart, closestPlayer
 end
 
--- 6. Silent Aim Metatable
+-- 6. Silent Aim Metatable Hook
 local rawMetatable = getrawmetatable(game)
 local oldNamecall = rawMetatable.__namecall
 local oldIndex = rawMetatable.__index
@@ -237,17 +261,20 @@ end)
 
 setreadonly(rawMetatable, true)
 
--- 7. 자동 발사 함수 (UI 켜짐 & 3인칭 조건 차단)
+-- 7. 초고속 자동 발사 (Void Spam 시 쿨다운 즉시 무시)
 local lastShootTime = 0
 
-local function BuffedAutoShoot(targetPart)
-    -- UI 열려있거나 1인칭이 아니면 사격 안 함
-    if IsUIOpen() or not IsFirstPerson() then 
+local function BuffedAutoShoot(targetPart, forceShoot)
+    -- 조건 검사 (3인칭, 커서 풀림, UI 열림 시 사격 안 함)
+    if not CanAutoShoot() then 
         return 
     end
 
     local now = os.clock()
-    if now - lastShootTime < 0.03 then return end
+    -- forceShoot(Void 공격 프레임)가 아닐 때만 쿨다운 적용
+    if not forceShoot and (now - lastShootTime < 0.03) then 
+        return 
+    end
     lastShootTime = now
 
     local char = LocalPlayer.Character
@@ -287,7 +314,7 @@ local function BuffedAutoShoot(targetPart)
     end)
 end
 
--- 8. 메인 프레임 루프
+-- 8. 메인 프레임 루프 (Void Spam 0.01초 정밀 사격 제어)
 local voidState = "Attack"
 local lastStateChange = os.clock()
 
@@ -312,7 +339,7 @@ RunService.Heartbeat:Connect(function()
         TargetStatusLabel:SetText('Target Status: None')
     end
 
-    -- [Rage Bot 및 Void Spam 발사 제어]
+    -- [Rage Bot & Void Spam 루프]
     if Toggles.RageEnabled.Value and CurrentTargetPart then
         local targetPos = CurrentTargetPart.Position
         local height = Options.TPHeight.Value
@@ -323,26 +350,31 @@ RunService.Heartbeat:Connect(function()
             local hideTime = Options.HideTime.Value
             local attackTime = Options.AttackTime.Value
 
-            if voidState == "Attack" and (now - lastStateChange >= attackTime) then
-                voidState = "Hide"
-                lastStateChange = now
-            elseif voidState == "Hide" and (now - lastStateChange >= hideTime) then
-                voidState = "Attack"
-                lastStateChange = now
-            end
-
-            if voidState == "Hide" then
-                -- 숨는 동안은 절대로 사격 금지
-                hrp.CFrame = CFrame.new(0, -500, 0)
-            else
-                -- 적 상공에 텔레포트된 Attack 순간에만 정밀 발사 실행
-                hrp.CFrame = CFrame.lookAt(abovePos, targetPos) * CFrame.Angles(math.rad(-90), 0, 0)
-                BuffedAutoShoot(CurrentTargetPart)
+            if voidState == "Attack" then
+                if (now - lastStateChange >= attackTime) then
+                    voidState = "Hide"
+                    lastStateChange = now
+                    hrp.CFrame = CFrame.new(0, -500, 0) -- 숨기
+                else
+                    -- 공격 상태: 적 상공 TP 후 0.001초 즉시 정밀 발사
+                    hrp.CFrame = CFrame.lookAt(abovePos, targetPos) * CFrame.Angles(math.rad(-90), 0, 0)
+                    BuffedAutoShoot(CurrentTargetPart, true)
+                end
+            elseif voidState == "Hide" then
+                if (now - lastStateChange >= hideTime) then
+                    voidState = "Attack"
+                    lastStateChange = now
+                    -- 공격 상태 진입 즉시 TP 및 강제 즉시 발사
+                    hrp.CFrame = CFrame.lookAt(abovePos, targetPos) * CFrame.Angles(math.rad(-90), 0, 0)
+                    BuffedAutoShoot(CurrentTargetPart, true)
+                else
+                    hrp.CFrame = CFrame.new(0, -500, 0)
+                end
             end
         else
-            -- 일반 TP 공격 시 1인칭/UI 체크 후 발사
+            -- 일반 TP 공격
             hrp.CFrame = CFrame.lookAt(abovePos, targetPos) * CFrame.Angles(math.rad(-90), 0, 0)
-            BuffedAutoShoot(CurrentTargetPart)
+            BuffedAutoShoot(CurrentTargetPart, false)
         end
 
         hrp.AssemblyLinearVelocity = Vector3.zero
