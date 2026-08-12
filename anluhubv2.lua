@@ -1,15 +1,31 @@
-local repo = 'https://raw.githubusercontent.com/Anlu-Dev/Library/refs/heads/main/'
-local Library = loadstring(game:HttpGet(repo .. 'Library.lua'))()
-local ThemeManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/addons/ThemeManager.lua'))()
-local SaveManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/addons/SaveManager.lua'))()
+-- 1. 안전한 HttpGet
+local function SafeHttpGet(url)
+    local success, result = pcall(function()
+        return game:HttpGet(url, true)
+    end)
+    if success and result then return result end
+    return nil
+end
 
--- 서비스 참조
+local repo = 'https://raw.githubusercontent.com/Anlu-Dev/Library/refs/heads/main/'
+local libRaw = SafeHttpGet(repo .. 'Library.lua')
+local themeRaw = SafeHttpGet('https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/addons/ThemeManager.lua')
+local saveRaw = SafeHttpGet('https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/addons/SaveManager.lua')
+
+if not libRaw or not themeRaw or not saveRaw then
+    return warn("[Eclipse Core] 라이브러리 불러오기 실패. 다시 실행해주세요.")
+end
+
+local Library = loadstring(libRaw)()
+local ThemeManager = loadstring(themeRaw)()
+local SaveManager = loadstring(saveRaw)()
+
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
--- 1. 윈도우 생성
+-- 2. 윈도우 및 탭 생성
 local Window = Library:CreateWindow({
     Title = 'Eclipse | Core System',
     Center = true,
@@ -18,7 +34,6 @@ local Window = Library:CreateWindow({
     MenuFadeTime = 0.2
 })
 
--- 2. 탭 생성
 local Tabs = {
     Main = Window:AddTab('Main'),
     Visuals = Window:AddTab('Visuals'),
@@ -30,9 +45,8 @@ local Tabs = {
 
 -- 3. Character 탭 구성
 local CharGroup = Tabs.Character:AddLeftGroupbox('Movement')
-local AAGroup = Tabs.Character:AddRightGroupbox('Anti Aim')
+local AAGroup = Tabs.Character:AddRightGroupbox('Server Anti Aim')
 
--- [Movement 섹션]
 CharGroup:AddToggle('Fly', {Text = 'Fly (Space: 상승 / Shift: 하강)'})
 CharGroup:AddSlider('FlySpeed', {Text = 'Fly Speed', Default = 50, Min = 10, Max = 200, Rounding = 0})
 
@@ -44,42 +58,35 @@ CharGroup:AddToggle('JumpEnabled', {Text = 'Infinite Jump'})
 CharGroup:AddToggle('SlideBoost', {Text = 'Slide Boost'})
 CharGroup:AddSlider('BoostForce', {Text = 'Boost Power', Default = 3, Min = 1, Max = 10, Rounding = 1})
 
--- [Anti Aim 섹션]
-AAGroup:AddToggle('AAEnabled', {Text = 'Enable Anti Aim'})
+-- Anti Aim
+AAGroup:AddToggle('AAEnabled', {Text = 'Enable Server Anti Aim'})
 
--- Yaw 설정 (0 ~ 180도)
 AAGroup:AddDropdown('YawMode', {
-    Values = {'Static', 'Jitter', 'Random', 'Extended Random'},
+    Values = {'Spin', 'Jitter', 'Random', 'Backwards'},
     Default = 1,
     Multi = false,
-    Text = 'Yaw Mode'
+    Text = 'Yaw Mode (Server Side)'
 })
-AAGroup:AddSlider('YawAngle', {Text = 'Torso Yaw Limit', Default = 90, Min = 0, Max = 180, Rounding = 0})
-AAGroup:AddSlider('YawSpeed', {Text = 'Yaw Speed / Jitter Speed', Default = 10, Min = 1, Max = 50, Rounding = 0})
+AAGroup:AddSlider('YawAngle', {Text = 'Yaw Limit (Degrees)', Default = 90, Min = 0, Max = 180, Rounding = 0})
+AAGroup:AddSlider('YawSpeed', {Text = 'Rotation Speed', Default = 15, Min = 1, Max = 50, Rounding = 0})
 
--- Pitch 설정 (-180 ~ 180도 확장)
-AAGroup:AddDropdown('PitchMode', {
-    Values = {'Static', 'Up', 'Down', 'Random', 'Extended Random'},
-    Default = 1,
-    Multi = false,
-    Text = 'Pitch Mode'
-})
-AAGroup:AddSlider('PitchAngle', {Text = 'Pitch Angle (Static)', Default = 0, Min = -180, Max = 180, Rounding = 0})
+-- 캐싱 처리
+local Cache = { hrp = nil, hum = nil }
 
--- 관절 원본 상태 저장 변수
-local originalWaistC0 = nil
-local originalRootC0 = nil
-local originalNeckC0 = nil
-local originalLeftHipC0 = nil
-local originalRightHipC0 = nil
+local function UpdateCache(character)
+    if not character then Cache.hrp = nil Cache.hum = nil return end
+    Cache.hrp = character:WaitForChild("HumanoidRootPart", 3)
+    Cache.hum = character:WaitForChild("Humanoid", 3)
+end
 
--- 4. 메인 루프 (Movement + Anti Aim)
-RunService.RenderStepped:Connect(function(delta)
-    local char = LocalPlayer.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChild("Humanoid")
-    if not hrp or not hum then return end
+if LocalPlayer.Character then UpdateCache(LocalPlayer.Character) end
+LocalPlayer.CharacterAdded:Connect(UpdateCache)
+
+-- 4. 메인 루프 (서버 복제 CFrame 처리)
+RunService.PreSimulation:Connect(function(delta)
+    local hrp = Cache.hrp
+    local hum = Cache.hum
+    if not hrp or not hum or hum.Health <= 0 then return end
 
     -- [1] Fly
     if Toggles.Fly.Value then
@@ -101,11 +108,9 @@ RunService.RenderStepped:Connect(function(delta)
     end
 
     -- [2] Speed Hack
-    if Toggles.SpeedEnabled.Value and not Toggles.Fly.Value then
-        if hum.MoveDirection.Magnitude > 0 then
-            local extraSpeed = (Options.WalkSpeed.Value - 1) * 16
-            hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (extraSpeed * delta))
-        end
+    if Toggles.SpeedEnabled.Value and not Toggles.Fly.Value and hum.MoveDirection.Magnitude > 0 then
+        local extraSpeed = (Options.WalkSpeed.Value - 1) * 16
+        hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (extraSpeed * delta))
     end
 
     -- [3] Slide Boost
@@ -114,88 +119,38 @@ RunService.RenderStepped:Connect(function(delta)
         hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (boost * delta))
     end
 
-    -- [4] Anti Aim (다리 고정 + Pitch 180도 연산)
-    local upperTorso = char:FindFirstChild("UpperTorso")
-    local waist = upperTorso and upperTorso:FindFirstChild("Waist")
-    local rootJoint = hrp:FindFirstChild("RootJoint")
-    local neck = (char:FindFirstChild("Torso") and char.Torso:FindFirstChild("Neck")) or (char:FindFirstChild("Head") and char.Head:FindFirstChild("Neck")) or (upperTorso and upperTorso:FindFirstChild("Neck"))
-    
-    local torso = char:FindFirstChild("Torso")
-    local leftHip = torso and torso:FindFirstChild("Left Hip")
-    local rightHip = torso and torso:FindFirstChild("Right Hip")
-
+    -- [4] Server-Sided Anti Aim (CFrame 회전식)
     if Toggles.AAEnabled.Value then
+        hum.AutoRotate = false -- 캐릭터 자동 시점 회전 끄기 (서버 반영 필수)
+
         local yaw = 0
-        local pitch = 0
         local speed = Options.YawSpeed.Value
         local yawLimit = Options.YawAngle.Value
-
-        -- Yaw 연산 (0~180도)
         local yMode = Options.YawMode.Value
-        if yMode == 'Static' then
-            yaw = math.rad(yawLimit)
+
+        if yMode == 'Spin' then
+            yaw = math.rad((tick() * speed * 50) % 360)
         elseif yMode == 'Jitter' then
             yaw = math.rad(math.sin(tick() * speed) * yawLimit)
         elseif yMode == 'Random' then
             yaw = math.rad(math.random(-yawLimit, yawLimit))
-        elseif yMode == 'Extended Random' then
-            yaw = math.rad(math.random(-yawLimit, yawLimit))
+        elseif yMode == 'Backwards' then
+            yaw = math.rad(180)
         end
 
-        -- Pitch 연산 (-180~180도)
-        local pMode = Options.PitchMode.Value
-        if pMode == 'Up' then
-            pitch = math.rad(-180)
-        elseif pMode == 'Down' then
-            pitch = math.rad(180)
-        elseif pMode == 'Random' then
-            pitch = math.rad(math.random(-180, 180))
-        elseif pMode == 'Extended Random' then
-            pitch = math.rad(math.random(-180, 180))
-        elseif pMode == 'Static' then
-            pitch = math.rad(Options.PitchAngle.Value)
-        end
-
-        -- R15 상체 전용 회전 (하체 자동 고정)
-        if waist then
-            if not originalWaistC0 then originalWaistC0 = waist.C0 end
-            waist.C0 = originalWaistC0 * CFrame.Angles(pitch, yaw, 0)
-        -- R6 상체 회전 + 다리 역행렬 고정 연산
-        elseif rootJoint then
-            if not originalRootC0 then originalRootC0 = rootJoint.C0 end
-            rootJoint.C0 = originalRootC0 * CFrame.Angles(0, 0, yaw)
-
-            -- R6 다리를 몸통 회전 반대 방향으로 상쇄시켜 제자리에 고정
-            if leftHip and rightHip then
-                if not originalLeftHipC0 then originalLeftHipC0 = leftHip.C0 end
-                if not originalRightHipC0 then originalRightHipC0 = rightHip.C0 end
-
-                local counterMatrix = (rootJoint.C0:Inverse() * originalRootC0)
-                leftHip.C0 = counterMatrix * originalLeftHipC0
-                rightHip.C0 = counterMatrix * originalRightHipC0
-            end
-        end
-
-        if neck then
-            if not originalNeckC0 then originalNeckC0 = neck.C0 end
-            neck.C0 = originalNeckC0 * CFrame.Angles(pitch, 0, 0)
-        end
+        -- HumanoidRootPart CFrame 직접 회전 (서버 복제)
+        local currentPos = hrp.Position
+        local currentRot = hrp.CFrame - currentPos
+        hrp.CFrame = CFrame.new(currentPos) * (currentRot * CFrame.Angles(0, yaw, 0))
     else
-        -- 비활성화 시 모든 관절 원상복구
-        if originalWaistC0 and waist then waist.C0 = originalWaistC0 originalWaistC0 = nil end
-        if originalRootC0 and rootJoint then rootJoint.C0 = originalRootC0 originalRootC0 = nil end
-        if originalNeckC0 and neck then neck.C0 = originalNeckC0 originalNeckC0 = nil end
-        if originalLeftHipC0 and leftHip then leftHip.C0 = originalLeftHipC0 originalLeftHipC0 = nil end
-        if originalRightHipC0 and rightHip then rightHip.C0 = originalRightHipC0 originalRightHipC0 = nil end
+        hum.AutoRotate = true -- 원상 복구
     end
 end)
 
 -- 무한 점프
 UserInputService.JumpRequest:Connect(function()
-    if Toggles.JumpEnabled.Value then
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChild("Humanoid")
-        if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+    if Toggles.JumpEnabled.Value and Cache.hum then
+        Cache.hum:ChangeState(Enum.HumanoidStateType.Jumping)
     end
 end)
 
