@@ -1,4 +1,4 @@
--- 1. 안전한 HttpGet
+-- 1. 안전한 HttpGet (타임아웃 방지)
 local function SafeHttpGet(url)
     local success, result = pcall(function()
         return game:HttpGet(url, true)
@@ -13,7 +13,7 @@ local themeRaw = SafeHttpGet('https://raw.githubusercontent.com/violin-suzutsuki
 local saveRaw = SafeHttpGet('https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/addons/SaveManager.lua')
 
 if not libRaw or not themeRaw or not saveRaw then
-    return warn("[Eclipse Core] 라이브러리를 불러오지 못했습니다.")
+    return warn("[Eclipse Core] 라이브러리 불러오기 실패. 잠시 후 다시 시도해 주세요.")
 end
 
 local Library = loadstring(libRaw)()
@@ -44,7 +44,7 @@ local Tabs = {
 }
 
 local CharGroup = Tabs.Character:AddLeftGroupbox('Movement')
-local AAGroup = Tabs.Character:AddRightGroupbox('Anti Aim Settings')
+local AAGroup = Tabs.Character:AddRightGroupbox('Anti Aim')
 
 -- Movement
 CharGroup:AddToggle('Fly', {Text = 'Fly (Space: 상승 / Shift: 하강)'})
@@ -61,22 +61,14 @@ CharGroup:AddSlider('BoostForce', {Text = 'Boost Power', Default = 3, Min = 1, M
 -- Anti Aim
 AAGroup:AddToggle('AAEnabled', {Text = 'Enable Anti Aim'})
 
--- 작동 타겟 선택 (서버 반영 vs 내 화면 상체 고정)
-AAGroup:AddDropdown('AATarget', {
-    Values = {'Local (상체만 회전 / 다리고정)', 'Server (서버복제 / 전체회전)'},
-    Default = 1,
-    Multi = false,
-    Text = 'Anti-Aim Target'
-})
-
 AAGroup:AddDropdown('YawMode', {
-    Values = {'Static', 'Jitter', 'Random', 'Spin', 'Backwards'},
+    Values = {'Static', 'Jitter', 'Random', 'Spin'},
     Default = 1,
     Multi = false,
-    Text = 'Yaw Mode'
+    Text = 'Torso Yaw Mode'
 })
-AAGroup:AddSlider('YawAngle', {Text = 'Yaw Limit (0~180)', Default = 90, Min = 0, Max = 180, Rounding = 0})
-AAGroup:AddSlider('YawSpeed', {Text = 'Rotation Speed', Default = 15, Min = 1, Max = 50, Rounding = 0})
+AAGroup:AddSlider('YawAngle', {Text = 'Torso Yaw Limit', Default = 90, Min = 0, Max = 180, Rounding = 0})
+AAGroup:AddSlider('YawSpeed', {Text = 'Yaw Speed', Default = 15, Min = 1, Max = 50, Rounding = 0})
 
 AAGroup:AddDropdown('PitchMode', {
     Values = {'Static', 'Up', 'Down', 'Random'},
@@ -84,9 +76,9 @@ AAGroup:AddDropdown('PitchMode', {
     Multi = false,
     Text = 'Pitch Mode'
 })
-AAGroup:AddSlider('PitchAngle', {Text = 'Pitch Angle (-180~180)', Default = 0, Min = -180, Max = 180, Rounding = 0})
+AAGroup:AddSlider('PitchAngle', {Text = 'Pitch Angle', Default = 0, Min = -180, Max = 180, Rounding = 0})
 
--- 3. 캐싱
+-- 3. 캐싱 및 관절 보호
 local Cache = {
     char = nil, hrp = nil, hum = nil,
     waist = nil, rootJoint = nil, neck = nil,
@@ -95,7 +87,16 @@ local Cache = {
     origLeftHipC0 = nil, origRightHipC0 = nil
 }
 
+local function ResetJoints()
+    if Cache.waist and Cache.origWaistC0 then Cache.waist.C0 = Cache.origWaistC0 end
+    if Cache.rootJoint and Cache.origRootC0 then Cache.rootJoint.C0 = Cache.origRootC0 end
+    if Cache.neck and Cache.origNeckC0 then Cache.neck.C0 = Cache.origNeckC0 end
+    if Cache.leftHip and Cache.origLeftHipC0 then Cache.leftHip.C0 = Cache.origLeftHipC0 end
+    if Cache.rightHip and Cache.origRightHipC0 then Cache.rightHip.C0 = Cache.origRightHipC0 end
+end
+
 local function UpdateCache(character)
+    ResetJoints()
     if not character then return end
     Cache.char = character
     Cache.hrp = character:WaitForChild("HumanoidRootPart", 3)
@@ -121,8 +122,8 @@ end
 if LocalPlayer.Character then UpdateCache(LocalPlayer.Character) end
 LocalPlayer.CharacterAdded:Connect(UpdateCache)
 
--- 4. 메인 루프 (PreRender 연산으로 부드럽게 유지)
-RunService.PreRender:Connect(function(delta)
+-- 4. 메인 프레임 루프 (부드러운 상체 회전 연산)
+RunService.RenderStepped:Connect(function(delta)
     local hrp = Cache.hrp
     local hum = Cache.hum
     if not hrp or not hum or hum.Health <= 0 then return end
@@ -158,69 +159,45 @@ RunService.PreRender:Connect(function(delta)
         hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (boost * delta))
     end
 
-    -- [4] Anti Aim
+    -- [4] Anti Aim (상체만 독립 회전 / 다리 완전 고정)
     if Toggles.AAEnabled.Value then
         local yaw = 0
         local pitch = 0
         local speed = Options.YawSpeed.Value
         local yawLimit = Options.YawAngle.Value
 
-        -- Yaw 연산
+        -- Yaw 연산 (0 ~ 180도)
         local yMode = Options.YawMode.Value
         if yMode == 'Static' then yaw = math.rad(yawLimit)
         elseif yMode == 'Jitter' then yaw = math.rad(math.sin(tick() * speed) * yawLimit)
         elseif yMode == 'Random' then yaw = math.rad(math.random(-yawLimit, yawLimit))
-        elseif yMode == 'Spin' then yaw = math.rad((tick() * speed * 50) % 360)
-        elseif yMode == 'Backwards' then yaw = math.rad(180) end
+        elseif yMode == 'Spin' then yaw = math.rad((tick() * speed * 50) % 360) end
 
-        -- Pitch 연산
+        -- Pitch 연산 (-180 ~ 180도)
         local pMode = Options.PitchMode.Value
         if pMode == 'Up' then pitch = math.rad(-180)
         elseif pMode == 'Down' then pitch = math.rad(180)
         elseif pMode == 'Random' then pitch = math.rad(math.random(-180, 180))
         elseif pMode == 'Static' then pitch = math.rad(Options.PitchAngle.Value) end
 
-        local targetMode = Options.AATarget.Value
-
-        if targetMode == 'Local (상체만 회전 / 다리고정)' then
-            hum.AutoRotate = true
-            
-            -- 내 화면 전용: 상체만 독립 회전 (다리 고정)
-            if Cache.waist and Cache.origWaistC0 then
-                Cache.waist.C0 = Cache.origWaistC0 * CFrame.Angles(pitch, yaw, 0)
-            elseif Cache.rootJoint and Cache.origRootC0 then
-                Cache.rootJoint.C0 = Cache.origRootC0 * CFrame.Angles(0, 0, yaw)
-                if Cache.leftHip and Cache.rightHip and Cache.origLeftHipC0 and Cache.origRightHipC0 then
-                    local counterMatrix = (Cache.rootJoint.C0:Inverse() * Cache.origRootC0)
-                    Cache.leftHip.C0 = counterMatrix * Cache.origLeftHipC0
-                    Cache.rightHip.C0 = counterMatrix * Cache.origRightHipC0
-                end
+        -- R15 상체 회전
+        if Cache.waist and Cache.origWaistC0 then
+            Cache.waist.C0 = Cache.origWaistC0 * CFrame.Angles(pitch, yaw, 0)
+        -- R6 상체 회전 + 다리 보정
+        elseif Cache.rootJoint and Cache.origRootC0 then
+            Cache.rootJoint.C0 = Cache.origRootC0 * CFrame.Angles(0, 0, yaw)
+            if Cache.leftHip and Cache.rightHip and Cache.origLeftHipC0 and Cache.origRightHipC0 then
+                local counterMatrix = (Cache.rootJoint.C0:Inverse() * Cache.origRootC0)
+                Cache.leftHip.C0 = counterMatrix * Cache.origLeftHipC0
+                Cache.rightHip.C0 = counterMatrix * Cache.origRightHipC0
             end
+        end
 
-            if Cache.neck and Cache.origNeckC0 then
-                Cache.neck.C0 = Cache.origNeckC0 * CFrame.Angles(pitch, 0, 0)
-            end
-
-        elseif targetMode == 'Server (서버복제 / 전체회전)' then
-            hum.AutoRotate = false
-            
-            -- 관절 복구
-            if Cache.waist and Cache.origWaistC0 then Cache.waist.C0 = Cache.origWaistC0 end
-            if Cache.neck and Cache.origNeckC0 then Cache.neck.C0 = Cache.origNeckC0 end
-
-            -- 서버 반영: HumanoidRootPart CFrame 직접 회전
-            local currentPos = hrp.Position
-            local currentRot = hrp.CFrame - currentPos
-            hrp.CFrame = CFrame.new(currentPos) * (currentRot * CFrame.Angles(0, yaw, 0))
+        if Cache.neck and Cache.origNeckC0 then
+            Cache.neck.C0 = Cache.origNeckC0 * CFrame.Angles(pitch, 0, 0)
         end
     else
-        hum.AutoRotate = true
-        -- Off 상태 원복
-        if Cache.waist and Cache.origWaistC0 then Cache.waist.C0 = Cache.origWaistC0 end
-        if Cache.rootJoint and Cache.origRootC0 then Cache.rootJoint.C0 = Cache.origRootC0 end
-        if Cache.neck and Cache.origNeckC0 then Cache.neck.C0 = Cache.origNeckC0 end
-        if Cache.leftHip and Cache.origLeftHipC0 then Cache.leftHip.C0 = Cache.origLeftHipC0 end
-        if Cache.rightHip and Cache.origRightHipC0 then Cache.rightHip.C0 = Cache.origRightHipC0 end
+        ResetJoints()
     end
 end)
 
@@ -231,9 +208,10 @@ UserInputService.JumpRequest:Connect(function()
     end
 end)
 
--- Settings
+-- 5. Settings 설정
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
+
 SaveManager:IgnoreThemeSettings()
 SaveManager:SetIgnoreIndexes({})
 ThemeManager:SetFolder('EclipseCore')
