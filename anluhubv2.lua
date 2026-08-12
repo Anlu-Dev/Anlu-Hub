@@ -129,7 +129,6 @@ LocalPlayer.CharacterAdded:Connect(UpdateCache)
 
 -- 4. 필터링 유틸리티 함수들
 
--- 내 캐릭터 1인칭 검사
 local function IsSelfFirstPerson()
     local char = LocalPlayer.Character
     if not char then return false end
@@ -138,33 +137,25 @@ local function IsSelfFirstPerson()
     return (Camera.CFrame.Position - head.Position).Magnitude < 2.5
 end
 
--- 상대방 1인칭 검사 (머리가 투명해진 상태인지 확인)
 local function IsTargetFirstPerson(player)
     local char = player.Character
     if not char then return false end
     local head = char:FindFirstChild("Head")
     if not head then return false end
-    
-    -- 로블록스는 1인칭 시 Head의 LocalTransparencyModifier가 1(투명)이 됨
     return head.LocalTransparencyModifier >= 0.9 or head.Transparency >= 0.9
 end
 
--- 무적 및 공격 불가능 상태 검사
 local function IsInvincibleOrImmune(character)
     if not character then return true end
-    -- ForceField 체크
     if character:FindFirstChildOfClass("ForceField") then return true end
-    -- 스폰 및 버프 보호 태그 체크
     if character:FindFirstChild("SpawnProtection") or character:FindFirstChild("Shield") or character:FindFirstChild("Invincible") or character:FindFirstChild("GodMode") then return true end
     
-    -- 휴머노이드 검사
     local hum = character:FindFirstChildOfClass("Humanoid")
     if not hum or hum.Health <= 0 then return true end
     
     return false
 end
 
--- 팀원 검사
 local function IsTeammate(player)
     if player == LocalPlayer then return true end
     if LocalPlayer.Team ~= nil and player.Team ~= nil then
@@ -189,11 +180,8 @@ local function GetValidTarget()
     if not myHRP then return nil, nil end
 
     for _, player in ipairs(Players:GetPlayers()) do
-        -- 팀원 제외
         if not IsTeammate(player) and player.Character then
             local char = player.Character
-            
-            -- 무적/체력 검사
             if not IsInvincibleOrImmune(char) then
                 local partName = Options.TargetPart.Value
                 local targetPart = char:FindFirstChild(partName) or char:FindFirstChild("HumanoidRootPart")
@@ -259,25 +247,46 @@ end)
 
 setreadonly(rawMetatable, true)
 
--- 7. Auto Fire 함수
-local function TriggerAutoShoot()
+-- 7. 10스터드 이내 클릭 리모트(RemoteEvent) 직접 발동 사격 함수
+local function TriggerAutoShoot(targetPart)
     local char = LocalPlayer.Character
-    if not char then return end
+    if not char or not targetPart then return end
     local tool = char:FindFirstChildOfClass("Tool")
-    if tool then
-        tool:Activate()
-        pcall(function()
-            if mouse1press then
-                mouse1press()
-                task.delay(0.01, function() pcall(mouse1release) end)
-            else
-                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-                task.delay(0.01, function()
-                    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+    local myHRP = char:FindFirstChild("HumanoidRootPart")
+    if not tool or not myHRP then return end
+
+    local distance = (myHRP.Position - targetPart.Position).Magnitude
+
+    -- [핵심] 적과의 거리가 10스터드 이내일 때: Tool 내 리모트 이벤트 직접 실행
+    if distance <= 10 then
+        for _, v in ipairs(tool:GetDescendants()) do
+            if v:IsA("RemoteEvent") then
+                pcall(function()
+                    v:FireServer(targetPart.Position, targetPart)
+                    v:FireServer(targetPart)
+                    v:FireServer()
+                end)
+            elseif v:IsA("RemoteFunction") then
+                pcall(function()
+                    v:InvokeServer(targetPart.Position, targetPart)
                 end)
             end
-        end)
+        end
     end
+
+    -- 기본 도구 활성화 및 마우스 입력 주입 (2중 보장)
+    tool:Activate()
+    pcall(function()
+        if mouse1press then
+            mouse1press()
+            task.delay(0.01, function() pcall(mouse1release) end)
+        else
+            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+            task.delay(0.01, function()
+                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+            end)
+        end
+    end)
 end
 
 -- 8. 메인 프레임 루프
@@ -293,10 +302,6 @@ RunService.Stepped:Connect(function(_, delta)
 
     -- [Rage Bot 실행 조건]
     if Toggles.RageEnabled.Value and CurrentTargetPart and CurrentTargetPlayer then
-        -- 텔레포트 조건 검사:
-        -- 1. 나 자신이 1인칭일 것
-        -- 2. 적도 1인칭일 것
-        -- 3. 적이 무적이 아니며 팀원이 아닐 것
         local canTP = Toggles.TargetTP.Value 
             and IsSelfFirstPerson() 
             and IsTargetFirstPerson(CurrentTargetPlayer)
@@ -310,9 +315,9 @@ RunService.Stepped:Connect(function(_, delta)
             hrp.AssemblyLinearVelocity = Vector3.zero
         end
 
-        -- 자동 발사 (텔레포트 상태가 아니어도 Silent Aim과 함께 사격 가능)
+        -- 자동 발사 (목표 타깃 부위 전달)
         if Toggles.AutoShoot.Value then
-            TriggerAutoShoot()
+            TriggerAutoShoot(CurrentTargetPart)
         end
     end
 
@@ -379,7 +384,7 @@ end)
 
 -- 무한 점프
 UserInputService.JumpRequest:Connect(function()
-    if Toggles.JumpEnabled.Value and LocalPlayer.Character then
+    if Toggles.JumpEnabled.Value and LocalPlayer.Character me then
         local hum = LocalPlayer.Character:FindFirstChild("Humanoid")
         if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
     end
