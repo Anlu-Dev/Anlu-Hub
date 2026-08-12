@@ -13,7 +13,7 @@ local themeRaw = SafeHttpGet('https://raw.githubusercontent.com/violin-suzutsuki
 local saveRaw = SafeHttpGet('https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/addons/SaveManager.lua')
 
 if not libRaw or not themeRaw or not saveRaw then
-    return warn("[Eclipse Core] 라이브러리 불러오기 실패. 다시 실행해주세요.")
+    return warn("[Eclipse Core] 라이브러리 불러오기 실패.")
 end
 
 local Library = loadstring(libRaw)()
@@ -25,7 +25,7 @@ local UserInputService = game:GetService("UserInputService")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
--- 2. 윈도우 및 탭 생성
+-- 2. UI 구성
 local Window = Library:CreateWindow({
     Title = 'Eclipse | Core System',
     Center = true,
@@ -43,7 +43,6 @@ local Tabs = {
     Settings = Window:AddTab('Settings'),
 }
 
--- 3. Character 탭 구성
 local CharGroup = Tabs.Character:AddLeftGroupbox('Movement')
 local AAGroup = Tabs.Character:AddRightGroupbox('Server Anti Aim')
 
@@ -58,37 +57,68 @@ CharGroup:AddToggle('JumpEnabled', {Text = 'Infinite Jump'})
 CharGroup:AddToggle('SlideBoost', {Text = 'Slide Boost'})
 CharGroup:AddSlider('BoostForce', {Text = 'Boost Power', Default = 3, Min = 1, Max = 10, Rounding = 1})
 
--- Anti Aim
-AAGroup:AddToggle('AAEnabled', {Text = 'Enable Server Anti Aim'})
+-- Anti Aim UI
+AAGroup:AddToggle('AAEnabled', {Text = 'Enable Desync Anti Aim'})
 
 AAGroup:AddDropdown('YawMode', {
-    Values = {'Spin', 'Jitter', 'Random', 'Backwards'},
+    Values = {'Static', 'Jitter', 'Random', 'Spin'},
     Default = 1,
     Multi = false,
-    Text = 'Yaw Mode (Server Side)'
+    Text = 'Torso Yaw Mode'
 })
-AAGroup:AddSlider('YawAngle', {Text = 'Yaw Limit (Degrees)', Default = 90, Min = 0, Max = 180, Rounding = 0})
-AAGroup:AddSlider('YawSpeed', {Text = 'Rotation Speed', Default = 15, Min = 1, Max = 50, Rounding = 0})
+AAGroup:AddSlider('YawAngle', {Text = 'Torso Yaw Limit', Default = 90, Min = 0, Max = 180, Rounding = 0})
+AAGroup:AddSlider('YawSpeed', {Text = 'Yaw Speed', Default = 15, Min = 1, Max = 50, Rounding = 0})
 
--- 캐싱 처리
-local Cache = { hrp = nil, hum = nil }
+AAGroup:AddDropdown('PitchMode', {
+    Values = {'Static', 'Up', 'Down', 'Random'},
+    Default = 1,
+    Multi = false,
+    Text = 'Pitch Mode'
+})
+AAGroup:AddSlider('PitchAngle', {Text = 'Pitch Angle', Default = 0, Min = -180, Max = 180, Rounding = 0})
+
+-- 3. 캐싱 및 원본 저장
+local Cache = {
+    char = nil, hrp = nil, hum = nil,
+    waist = nil, rootJoint = nil, neck = nil,
+    leftHip = nil, rightHip = nil,
+    origWaistC0 = nil, origRootC0 = nil, origNeckC0 = nil,
+    origLeftHipC0 = nil, origRightHipC0 = nil
+}
 
 local function UpdateCache(character)
-    if not character then Cache.hrp = nil Cache.hum = nil return end
+    if not character then return end
+    Cache.char = character
     Cache.hrp = character:WaitForChild("HumanoidRootPart", 3)
     Cache.hum = character:WaitForChild("Humanoid", 3)
+    if not Cache.hrp or not Cache.hum then return end
+
+    local upperTorso = character:FindFirstChild("UpperTorso")
+    local torso = character:FindFirstChild("Torso")
+
+    Cache.waist = upperTorso and upperTorso:FindFirstChild("Waist")
+    Cache.rootJoint = Cache.hrp:FindFirstChild("RootJoint")
+    Cache.neck = (torso and torso:FindFirstChild("Neck")) or (character:FindFirstChild("Head") and character.Head:FindFirstChild("Neck")) or (upperTorso and upperTorso:FindFirstChild("Neck"))
+    Cache.leftHip = torso and torso:FindFirstChild("Left Hip")
+    Cache.rightHip = torso and torso:FindFirstChild("Right Hip")
+
+    if Cache.waist then Cache.origWaistC0 = Cache.waist.C0 end
+    if Cache.rootJoint then Cache.origRootC0 = Cache.rootJoint.C0 end
+    if Cache.neck then Cache.origNeckC0 = Cache.neck.C0 end
+    if Cache.leftHip then Cache.origLeftHipC0 = Cache.leftHip.C0 end
+    if Cache.rightHip then Cache.origRightHipC0 = Cache.rightHip.C0 end
 end
 
 if LocalPlayer.Character then UpdateCache(LocalPlayer.Character) end
 LocalPlayer.CharacterAdded:Connect(UpdateCache)
 
--- 4. 메인 루프 (서버 복제 CFrame 처리)
+-- 4. 루프 제어 (Visual 상체 분리 + Server Desync)
 RunService.PreSimulation:Connect(function(delta)
     local hrp = Cache.hrp
     local hum = Cache.hum
     if not hrp or not hum or hum.Health <= 0 then return end
 
-    -- [1] Fly
+    -- [Movement]
     if Toggles.Fly.Value then
         hrp.AssemblyLinearVelocity = Vector3.zero
         local cam = workspace.CurrentCamera
@@ -107,57 +137,78 @@ RunService.PreSimulation:Connect(function(delta)
         end
     end
 
-    -- [2] Speed Hack
     if Toggles.SpeedEnabled.Value and not Toggles.Fly.Value and hum.MoveDirection.Magnitude > 0 then
         local extraSpeed = (Options.WalkSpeed.Value - 1) * 16
         hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (extraSpeed * delta))
     end
 
-    -- [3] Slide Boost
     if Toggles.SlideBoost.Value and not Toggles.Fly.Value and hum.MoveDirection.Magnitude > 0 then
         local boost = Options.BoostForce.Value * 5
         hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (boost * delta))
     end
 
-    -- [4] Server-Sided Anti Aim (CFrame 회전식)
+    -- [Anti Aim]
     if Toggles.AAEnabled.Value then
-        hum.AutoRotate = false -- 캐릭터 자동 시점 회전 끄기 (서버 반영 필수)
-
         local yaw = 0
+        local pitch = 0
         local speed = Options.YawSpeed.Value
         local yawLimit = Options.YawAngle.Value
-        local yMode = Options.YawMode.Value
 
-        if yMode == 'Spin' then
-            yaw = math.rad((tick() * speed * 50) % 360)
-        elseif yMode == 'Jitter' then
-            yaw = math.rad(math.sin(tick() * speed) * yawLimit)
-        elseif yMode == 'Random' then
-            yaw = math.rad(math.random(-yawLimit, yawLimit))
-        elseif yMode == 'Backwards' then
-            yaw = math.rad(180)
+        -- Yaw 계산
+        local yMode = Options.YawMode.Value
+        if yMode == 'Static' then yaw = math.rad(yawLimit)
+        elseif yMode == 'Jitter' then yaw = math.rad(math.sin(tick() * speed) * yawLimit)
+        elseif yMode == 'Random' then yaw = math.rad(math.random(-yawLimit, yawLimit))
+        elseif yMode == 'Spin' then yaw = math.rad((tick() * speed * 50) % 360) end
+
+        -- Pitch 계산
+        local pMode = Options.PitchMode.Value
+        if pMode == 'Up' then pitch = math.rad(-180)
+        elseif pMode == 'Down' then pitch = math.rad(180)
+        elseif pMode == 'Random' then pitch = math.rad(math.random(-180, 180))
+        elseif pMode == 'Static' then pitch = math.rad(Options.PitchAngle.Value) end
+
+        -- 1) 시각적 상체 전용 회전 (다리 완전 고정)
+        if Cache.waist and Cache.origWaistC0 then
+            Cache.waist.C0 = Cache.origWaistC0 * CFrame.Angles(pitch, yaw, 0)
+        elseif Cache.rootJoint and Cache.origRootC0 then
+            Cache.rootJoint.C0 = Cache.origRootC0 * CFrame.Angles(0, 0, yaw)
+            if Cache.leftHip and Cache.rightHip and Cache.origLeftHipC0 and Cache.origRightHipC0 then
+                local counterMatrix = (Cache.rootJoint.C0:Inverse() * Cache.origRootC0)
+                Cache.leftHip.C0 = counterMatrix * Cache.origLeftHipC0
+                Cache.rightHip.C0 = counterMatrix * Cache.origRightHipC0
+            end
         end
 
-        -- HumanoidRootPart CFrame 직접 회전 (서버 복제)
-        local currentPos = hrp.Position
-        local currentRot = hrp.CFrame - currentPos
-        hrp.CFrame = CFrame.new(currentPos) * (currentRot * CFrame.Angles(0, yaw, 0))
+        if Cache.neck and Cache.origNeckC0 then
+            Cache.neck.C0 = Cache.origNeckC0 * CFrame.Angles(pitch, 0, 0)
+        end
+
+        -- 2) 서버 히트박스 디싱크 (서버 및 타인 시점 조준선 훼방)
+        local oldVel = hrp.AssemblyLinearVelocity
+        hrp.AssemblyLinearVelocity = Vector3.new(math.random(-100, 100), 0, math.random(-100, 100))
+        RunService.PostSimulation:Wait()
+        hrp.AssemblyLinearVelocity = oldVel
     else
-        hum.AutoRotate = true -- 원상 복구
+        -- 끄면 관절 즉시 복원
+        if Cache.waist and Cache.origWaistC0 then Cache.waist.C0 = Cache.origWaistC0 end
+        if Cache.rootJoint and Cache.origRootC0 then Cache.rootJoint.C0 = Cache.origRootC0 end
+        if Cache.neck and Cache.origNeckC0 then Cache.neck.C0 = Cache.origNeckC0 end
+        if Cache.leftHip and Cache.origLeftHipC0 then Cache.leftHip.C0 = Cache.origLeftHipC0 end
+        if Cache.rightHip and Cache.origRightHipC0 then Cache.rightHip.C0 = Cache.origRightHipC0 end
     end
 end)
 
--- 무한 점프
+-- 점프
 UserInputService.JumpRequest:Connect(function()
     if Toggles.JumpEnabled.Value and Cache.hum then
         Cache.hum:ChangeState(Enum.HumanoidStateType.Jumping)
     end
 end)
 
--- 5. Settings 및 매니저 설정
+-- Settings
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
-
 SaveManager:IgnoreThemeSettings()
 SaveManager:SetIgnoreIndexes({})
 ThemeManager:SetFolder('EclipseCore')
