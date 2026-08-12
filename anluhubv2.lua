@@ -5,8 +5,8 @@ local SaveManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/v
 
 -- 서비스 참조
 local RunService = game:GetService("RunService")
-local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
+local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
 -- 1. 윈도우 생성
@@ -18,7 +18,7 @@ local Window = Library:CreateWindow({
     MenuFadeTime = 0.2
 })
 
--- 2. 탭 생성
+-- 탭 생성
 local Tabs = {
     Main = Window:AddTab('Main'),
     Visuals = Window:AddTab('Visuals'),
@@ -28,87 +28,70 @@ local Tabs = {
     Settings = Window:AddTab('Settings'),
 }
 
--- 3. Character 탭 구성 (기능별 개별 토글 및 슬라이더 분리)
-local CharGroup = Tabs.Character:AddLeftGroupbox('Movement')
+-- 2. Character 탭 구현 (직접 물리 조작 방식)
+local CharGroup = Tabs.Character:AddLeftGroupbox('Movement (Velocity Mode)')
 
--- Fly
 CharGroup:AddToggle('Fly', {Text = 'Fly'})
-CharGroup:AddSlider('FlySpeed', {Text = 'Fly Speed', Default = 50, Min = 10, Max = 200, Rounding = 0})
+CharGroup:AddSlider('FlySpeed', {Text = 'Fly Speed', Default = 50, Min = 10, Max = 150, Rounding = 0})
 
--- WalkSpeed
-CharGroup:AddToggle('WalkSpeedToggle', {Text = 'Enable WalkSpeed'})
-CharGroup:AddSlider('WalkSpeed', {Text = 'Walk Speed', Default = 16, Min = 16, Max = 100, Rounding = 0})
+CharGroup:AddToggle('SpeedEnabled', {Text = 'Speed Hack'})
+CharGroup:AddSlider('WalkSpeed', {Text = 'Speed Amount', Default = 25, Min = 16, Max = 100, Rounding = 0})
 
--- JumpPower
-CharGroup:AddToggle('JumpPowerToggle', {Text = 'Enable JumpPower'})
-CharGroup:AddSlider('JumpPower', {Text = 'Jump Power', Default = 50, Min = 50, Max = 200, Rounding = 0})
+CharGroup:AddToggle('JumpEnabled', {Text = 'Infinite Jump'})
 
--- Slide Boost
 CharGroup:AddToggle('SlideBoost', {Text = 'Slide Boost'})
-CharGroup:AddSlider('BoostForce', {Text = 'Boost Force', Default = 2, Min = 1, Max = 10, Rounding = 1})
+CharGroup:AddSlider('BoostForce', {Text = 'Boost Power', Default = 5, Min = 1, Max = 20, Rounding = 1})
 
--- 4. 기능 로직 연결
-local flyVelocity = nil
-
-RunService.RenderStepped:Connect(function()
+-- 3. 핵심 물리 엔진 로직 (RunService.PreSimulation 활용)
+RunService.PreSimulation:Connect(function()
     local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    local hum = char and char:FindFirstChild("Humanoid")
-    
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChild("Humanoid")
     if not hrp or not hum then return end
 
-    -- Fly 로직 (앞/뒤/좌/우 모두 지원)
+    -- [1] Fly 로직 (카메라 방향 기준)
     if Toggles.Fly.Value then
-        if not flyVelocity then
-            flyVelocity = Instance.new("BodyVelocity")
-            flyVelocity.MaxForce = Vector3.new(1, 1, 1) * 1e6
-            flyVelocity.Velocity = Vector3.new(0, 0, 0)
-            flyVelocity.Parent = hrp
-        end
-        
+        hum.PlatformStand = true -- 캐릭터가 넘어지지 않게 고정
         local cam = workspace.CurrentCamera
         local moveDir = Vector3.new(0, 0, 0)
         local speed = Options.FlySpeed.Value
 
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) then
-            moveDir = moveDir + cam.CFrame.LookVector
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) then
-            moveDir = moveDir - cam.CFrame.LookVector
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) then
-            moveDir = moveDir + cam.CFrame.RightVector
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.A) then
-            moveDir = moveDir - cam.CFrame.RightVector
-        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir += cam.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir -= cam.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir += cam.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir -= cam.CFrame.RightVector end
 
-        flyVelocity.Velocity = moveDir * speed
+        hrp.AssemblyLinearVelocity = moveDir * speed
     else
-        if flyVelocity then 
-            flyVelocity:Destroy() 
-            flyVelocity = nil 
+        hum.PlatformStand = false
+    end
+
+    -- [2] Speed Hack (Velocity 강제 적용)
+    if Toggles.SpeedEnabled.Value and not Toggles.Fly.Value then
+        local moveDir = hum.MoveDirection
+        if moveDir.Magnitude > 0 then
+            hrp.AssemblyLinearVelocity = Vector3.new(moveDir.X * Options.WalkSpeed.Value, hrp.AssemblyLinearVelocity.Y, moveDir.Z * Options.WalkSpeed.Value)
         end
     end
 
-    -- WalkSpeed 적용 (개별 토글 켜졌을 때만)
-    if Toggles.WalkSpeedToggle.Value then
-        hum.WalkSpeed = Options.WalkSpeed.Value
-    end
-
-    -- JumpPower 적용 (개별 토글 켜졌을 때만)
-    if Toggles.JumpPowerToggle.Value then
-        hum.JumpPower = Options.JumpPower.Value
-    end
-
-    -- Slide Boost 개선 로직
+    -- [3] Slide Boost (이동 방향으로 강한 힘 추가)
     if Toggles.SlideBoost.Value and hum.MoveDirection.Magnitude > 0 then
-        local boost = Options.BoostForce.Value
-        hrp.AssemblyLinearVelocity = hrp.AssemblyLinearVelocity + (hum.MoveDirection * boost)
+        hrp.AssemblyLinearVelocity += (hum.MoveDirection * Options.BoostForce.Value)
     end
 end)
 
--- 5. 시스템 설정 (Settings 탭)
+-- [4] Infinite Jump (이벤트 기반으로 훨씬 깔끔함)
+UserInputService.JumpRequest:Connect(function()
+    if Toggles.JumpEnabled.Value then
+        local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, 50, hrp.AssemblyLinearVelocity.Z)
+        end
+    end
+end)
+
+-- 4. 시스템 설정
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
 
