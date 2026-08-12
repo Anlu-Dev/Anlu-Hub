@@ -10,13 +10,13 @@ local Mouse = LocalPlayer:GetMouse()
 local oldKick
 oldKick = hookfunction(LocalPlayer.Kick, function(self, ...)
     if not checkcaller() then 
-        warn("[Anlu Bypass] 킥 시도를 차단했어! 🛡️")
+        warn("[Anlu Bypass] 킥 시도를 감지하고 차단했어! 🛡️")
         return nil 
     end
     return oldKick(self, ...)
 end)
 
--- Remote & Silent Aim Protection
+-- Remote & Silent Aim Protection (Theory-Perfect)
 local rawMetatable = getrawmetatable(game)
 local oldNamecall = rawMetatable.__namecall
 local oldIndex = rawMetatable.__index
@@ -51,29 +51,32 @@ rawMetatable.__index = newcclosure(function(self, index)
 end)
 setreadonly(rawMetatable, true)
 
--- [[ 1. 라이브러리 및 서비스 불러오기 ]]
+-- [[ 1. 라이브러리 및 서비스 로딩 ]]
 local function SafeHttpGet(url)
     local success, result = pcall(function() return game:HttpGet(url, true) end)
-    if success and result then return result end
-    return nil
+    return success and result or nil
 end
 
-local libRaw = SafeHttpGet('https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/Library.lua') or SafeHttpGet('https://raw.githubusercontent.com/wally-rblx/LinoriaLib/main/Library.lua')
-if not libRaw then return warn("[Eclipse Core] 라이브러리 불러오기 실패.") end
+local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
+local libRaw = SafeHttpGet(repo .. 'Library.lua') or SafeHttpGet('https://raw.githubusercontent.com/wally-rblx/LinoriaLib/main/Library.lua')
+if not libRaw then return warn("[Eclipse Core] 라이브러리 로드 실패.") end
 local Library = loadstring(libRaw)()
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local VirtualUser = game:GetService("VirtualUser")
 
--- [[ 2. UI 구성 (원래 코드 100% 유지) ]]
-local Window = Library:CreateWindow({ Title = 'Eclipse | Core System', Center = true, AutoShow = true, TabPadding = 8, MenuFadeTime = 0.2 })
+-- [[ 2. UI 구성 (원래 코드 100% 복구) ]]
+local Window = Library:CreateWindow({ Title = 'Anlu Hub | Masterpiece Edition', Center = true, AutoShow = true, TabPadding = 8, MenuFadeTime = 0.2 })
 local Tabs = { Main = Window:AddTab('Main'), Visuals = Window:AddTab('Visuals'), ESP = Window:AddTab('ESP'), Character = Window:AddTab('Character'), Misc = Window:AddTab('Misc'), Settings = Window:AddTab('Settings') }
 
+-- [Main 탭] Rage Bot & Target Settings
 local RageGroup = Tabs.Main:AddLeftGroupbox('360 Rage Bot')
 local TargetGroup = Tabs.Main:AddRightGroupbox('Rage Target Settings')
 
 RageGroup:AddToggle('RageEnabled', {Text = 'Enable Rage Bot', Default = false})
 RageGroup:AddToggle('VoidSpam', {Text = 'Enable Void Spam', Default = false})
-RageGroup:AddToggle('DesyncEnabled', {Text = 'Enable TRUE Desync (Soul Out)', Default = true})
+RageGroup:AddToggle('DesyncEnabled', {Text = 'Enable TRUE Desync (Soul Out)', Default = true}) -- 신규 추가
+RageGroup:AddToggle('Disable3rdPerson', {Text = '3인칭일 때 자동발사 끄기', Default = true})
+RageGroup:AddToggle('DisableUnlockedCursor', {Text = '커서 풀렸을 때 자동발사 끄기', Default = true})
 
 local TargetStatusLabel = TargetGroup:AddLabel('Target Status: None')
 TargetGroup:AddToggle('TeamCheck', {Text = 'Team Check (팀전 게임에서만 ON)', Default = false})
@@ -82,8 +85,10 @@ TargetGroup:AddSlider('TPHeight', {Text = 'TP Height Above Enemy', Default = 3, 
 TargetGroup:AddSlider('HideTime', {Text = 'Void Hide Time (Sec)', Default = 0.05, Min = 0.01, Max = 1, Rounding = 2})
 TargetGroup:AddSlider('AttackTime', {Text = 'Attack Time (Sec)', Default = 0.1, Min = 0.01, Max = 1, Rounding = 2})
 
+-- [Character 탭] Movement & Anti Aim (100% 복구)
 local CharGroup = Tabs.Character:AddLeftGroupbox('Movement')
 local AAGroup = Tabs.Character:AddRightGroupbox('Anti Aim')
+
 CharGroup:AddToggle('Fly', {Text = 'Fly (Space: 상승 / Shift: 하강)'})
 CharGroup:AddSlider('FlySpeed', {Text = 'Fly Speed', Default = 50, Min = 10, Max = 200, Rounding = 0})
 CharGroup:AddToggle('SpeedEnabled', {Text = 'Speed Hack'})
@@ -91,6 +96,7 @@ CharGroup:AddSlider('WalkSpeed', {Text = 'Speed Multiplier', Default = 2, Min = 
 CharGroup:AddToggle('JumpEnabled', {Text = 'Infinite Jump'})
 CharGroup:AddToggle('SlideBoost', {Text = 'Slide Boost'})
 CharGroup:AddSlider('BoostForce', {Text = 'Boost Power', Default = 3, Min = 1, Max = 10, Rounding = 1})
+
 AAGroup:AddToggle('AAEnabled', {Text = 'Enable Anti Aim'})
 AAGroup:AddDropdown('YawMode', { Values = {'Static', 'Jitter', 'Random', 'Spin'}, Default = 1, Multi = false, Text = 'Torso Yaw Mode' })
 AAGroup:AddSlider('YawAngle', {Text = 'Torso Yaw Limit', Default = 90, Min = 0, Max = 180, Rounding = 0})
@@ -98,11 +104,18 @@ AAGroup:AddSlider('YawSpeed', {Text = 'Yaw Speed', Default = 15, Min = 1, Max = 
 AAGroup:AddDropdown('PitchMode', { Values = {'Static', 'Up', 'Down', 'Random'}, Default = 1, Multi = false, Text = 'Pitch Mode' })
 AAGroup:AddSlider('PitchAngle', {Text = 'Pitch Angle', Default = 0, Min = -180, Max = 180, Rounding = 0})
 
--- [[ 3. 유틸리티 함수 ]]
+-- [[ 3. 핵심 로직 함수들 ]]
 local function CanAutoShoot()
     if Library.Toggled or (Library.ScreenGui and Library.ScreenGui.Enabled) then return false end
     if UserInputService:GetFocusedTextBox() ~= nil then return false end
-    if UserInputService.MouseBehavior == Enum.MouseBehavior.Default then return false end
+    if Toggles.DisableUnlockedCursor.Value and UserInputService.MouseBehavior == Enum.MouseBehavior.Default then return false end
+    if Toggles.Disable3rdPerson.Value then
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("Head") then
+            if (Camera.CFrame.Position - char.Head.Position).Magnitude > 2.2 then return false end
+        end
+        if UserInputService.MouseBehavior == Enum.MouseBehavior.Default then return false end
+    end
     return true
 end
 
@@ -154,13 +167,21 @@ end)
 
 local function BuffedAutoShoot()
     if not CanAutoShoot() then return end
-    local tool = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool")
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local tool = char:FindFirstChildOfClass("Tool")
+    if not tool and hum then
+        local backpackTool = LocalPlayer.Backpack:FindFirstChildOfClass("Tool")
+        if backpackTool then hum:EquipTool(backpackTool); tool = backpackTool end
+    end
     if tool then tool:Activate() end
     pcall(function() if mouse1press then mouse1press() mouse1release() end end)
     pcall(function() VirtualUser:CaptureController(); VirtualUser:Button1Down(Vector2.zero); VirtualUser:Button1Up(Vector2.zero) end)
+    pcall(function() local vp = Camera.ViewportSize; VirtualInputManager:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, true, game, 0); VirtualInputManager:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, false, game, 0) end)
 end
 
--- [[ 4. 메인 루프 (TRUE DESYNC FIX) ]]
+-- [[ 4. 메인 루프 (Theory-Perfect + All Features Integrated) ]]
 local ghostPart = Instance.new("Part")
 ghostPart.Transparency = 1; ghostPart.CanCollide = false; ghostPart.Anchored = true; ghostPart.Parent = workspace
 local voidState = "Attack"
@@ -178,30 +199,20 @@ RunService.Heartbeat:Connect(function()
 
     if _G.RageActive and _G.CurrentTargetPart then
         local targetPos = _G.CurrentTargetPart.Position
-        local height = Options.TPHeight.Value
-        local abovePos = targetPos + Vector3.new(0, height, 0)
+        local abovePos = targetPos + Vector3.new(0, Options.TPHeight.Value, 0)
         
-        -- [[ TRUE DESYNC FIX: 관절 해제 로직 ]]
+        -- TRUE Desync (Theory Optimized)
         if Toggles.DesyncEnabled.Value then
             if not _G.GhostPos then _G.GhostPos = hrp.CFrame end
             Camera.CameraSubject = ghostPart; ghostPart.CFrame = _G.GhostPos
-            
-            -- 로컬에서 관절(Motor6D)을 잠시 비활성화하여 튕김 현상 방지
-            for _, v in pairs(char:GetDescendants()) do
-                if v:IsA("Motor6D") and (v.Part0 == hrp or v.Part1 == hrp) then
-                    v.Enabled = false
-                end
-            end
-            
-            -- 신체 부위를 유체이탈 위치로 강제 이동
+            hum.PlatformStand = true; hum.AutoRotate = false
+            for _, v in pairs(char:GetDescendants()) do if v:IsA("Motor6D") and (v.Part0 == hrp or v.Part1 == hrp) then v.Enabled = false end end
             for _, v in pairs(char:GetChildren()) do
                 if v:IsA("BasePart") and v.Name ~= "HumanoidRootPart" then
                     v.CanCollide = false
                     v.CFrame = _G.GhostPos * (hrp.CFrame:ToObjectSpace(v.CFrame))
                 end
             end
-            
-            -- WASD 이동
             local moveDir = Vector3.zero
             if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir += Camera.CFrame.LookVector end
             if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir -= Camera.CFrame.LookVector end
@@ -209,16 +220,13 @@ RunService.Heartbeat:Connect(function()
             if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir += Camera.CFrame.RightVector end
             _G.GhostPos = _G.GhostPos + (moveDir * 0.5)
         else
-            -- Desync 꺼지면 관절 다시 복구
-            _G.GhostPos = nil; Camera.CameraSubject = hum
-            for _, v in pairs(char:GetDescendants()) do
-                if v:IsA("Motor6D") then v.Enabled = true end
-            end
+            hum.PlatformStand = false; hum.AutoRotate = true; _G.GhostPos = nil; Camera.CameraSubject = hum
+            for _, v in pairs(char:GetDescendants()) do if v:IsA("Motor6D") then v.Enabled = true end end
         end
 
         Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, targetPos)
 
-        -- [[ VOID SPAM ]]
+        -- Extreme Void Spam
         if Toggles.VoidSpam.Value then
             local now = os.clock()
             if voidState == "Attack" then
@@ -246,13 +254,15 @@ RunService.Heartbeat:Connect(function()
             BuffedAutoShoot()
         end
         hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
     else
-        Camera.CameraSubject = hum; _G.GhostPos = nil
+        hum.PlatformStand = false; hum.AutoRotate = true; Camera.CameraSubject = hum; _G.GhostPos = nil
         for _, v in pairs(char:GetDescendants()) do if v:IsA("Motor6D") then v.Enabled = true end end
     end
 
-    -- 원래 이동 로직
-    if Toggles.Fly.Value and not (_G.RageActive and _G.CurrentTargetPart) then
+    -- 원래 이동 로직 (100% 복구)
+    local isRageActive = Toggles.RageEnabled.Value and _G.CurrentTargetPart
+    if Toggles.Fly.Value and not isRageActive then
         hrp.AssemblyLinearVelocity = Vector3.zero
         local moveDir = Vector3.zero
         if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir += Camera.CFrame.LookVector end
@@ -267,7 +277,10 @@ RunService.Heartbeat:Connect(function()
         hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (Options.WalkSpeed.Value - 1) * 16 * 0.016)
     end
     if Toggles.JumpEnabled.Value and UserInputService:IsKeyDown(Enum.KeyCode.Space) then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
-    if Toggles.AAEnabled.Value and not (_G.RageActive and _G.CurrentTargetPart) then
+    if Toggles.SlideBoost.Value and hum.FloorMaterial ~= Enum.Material.Air and hum.MoveDirection.Magnitude > 0 and UserInputService:IsKeyDown(Enum.KeyCode.C) then
+        hrp.AssemblyLinearVelocity = hrp.AssemblyLinearVelocity + (hum.MoveDirection * Options.BoostForce.Value)
+    end
+    if Toggles.AAEnabled.Value and not isRageActive then
         local finalYaw = (Options.YawMode.Value == 'Spin' and math.rad((tick() * Options.YawSpeed.Value * 100) % 360)) or math.rad(Options.YawAngle.Value)
         local finalPitch = math.rad(Options.PitchAngle.Value)
         if Cache.waist then Cache.waist.C0 = CFrame.new(0, 0.85, 0) * CFrame.Angles(finalPitch, finalYaw, 0) end
@@ -275,12 +288,13 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
--- [Misc & Settings]
+-- [Misc & Settings 탭 100% 복구]
 local MiscGroup = Tabs.Misc:AddLeftGroupbox('Misc')
 MiscGroup:AddButton('FPS Boost', function() for _, v in pairs(workspace:GetDescendants()) do if v:IsA("BasePart") then v.Material = Enum.Material.SmoothPlastic end end end)
 MiscGroup:AddButton('Rejoin', function() game:GetService("TeleportService"):Teleport(game.PlaceId, LocalPlayer) end)
+
 local MenuGroup = Tabs.Settings:AddLeftGroupbox('Menu')
 MenuGroup:AddLabel('Menu Keybind'):AddKeybind('MenuKeybind', { Default = 'End', NoUI = true, Text = 'Menu Keybind' })
 Library.ToggleKeybind = Options.MenuKeybind
 
-print("[Anlu Hub] Soul-Master Edition Final Loaded! 🚀👻💎")
+print("[Anlu Hub] Masterpiece Edition Final Loaded! 🚀👻💎")
