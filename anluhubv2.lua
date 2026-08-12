@@ -6,6 +6,7 @@ local SaveManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/v
 -- 서비스 참조
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 
 -- 1. 윈도우 생성
@@ -27,25 +28,26 @@ local Tabs = {
     Settings = Window:AddTab('Settings'),
 }
 
--- 3. Character 탭 구현
+-- 3. Character 탭 구성 (기능별 개별 토글 및 슬라이더 분리)
 local CharGroup = Tabs.Character:AddLeftGroupbox('Movement')
 
--- Fly 기능
-local flySpeed = 50
+-- Fly
 CharGroup:AddToggle('Fly', {Text = 'Fly'})
 CharGroup:AddSlider('FlySpeed', {Text = 'Fly Speed', Default = 50, Min = 10, Max = 200, Rounding = 0})
+
+-- WalkSpeed
+CharGroup:AddToggle('WalkSpeedToggle', {Text = 'Enable WalkSpeed'})
+CharGroup:AddSlider('WalkSpeed', {Text = 'Walk Speed', Default = 16, Min = 16, Max = 100, Rounding = 0})
+
+-- JumpPower
+CharGroup:AddToggle('JumpPowerToggle', {Text = 'Enable JumpPower'})
+CharGroup:AddSlider('JumpPower', {Text = 'Jump Power', Default = 50, Min = 50, Max = 200, Rounding = 0})
 
 -- Slide Boost
 CharGroup:AddToggle('SlideBoost', {Text = 'Slide Boost'})
 CharGroup:AddSlider('BoostForce', {Text = 'Boost Force', Default = 2, Min = 1, Max = 10, Rounding = 1})
 
--- Velocity(WalkSpeed)
-CharGroup:AddSlider('WalkSpeed', {Text = 'Walk Speed', Default = 16, Min = 16, Max = 100, Rounding = 0})
-
--- JumpPower
-CharGroup:AddSlider('JumpPower', {Text = 'Jump Power', Default = 50, Min = 50, Max = 200, Rounding = 0})
-
--- 4. 로직 연결
+-- 4. 기능 로직 연결
 local flyVelocity = nil
 
 RunService.RenderStepped:Connect(function()
@@ -55,33 +57,58 @@ RunService.RenderStepped:Connect(function()
     
     if not hrp or not hum then return end
 
-    -- Fly 로직
+    -- Fly 로직 (앞/뒤/좌/우 모두 지원)
     if Toggles.Fly.Value then
         if not flyVelocity then
             flyVelocity = Instance.new("BodyVelocity")
-            flyVelocity.MaxForce = Vector3.new(1,1,1) * 1e6
-            flyVelocity.Velocity = Vector3.new(0,0,0)
+            flyVelocity.MaxForce = Vector3.new(1, 1, 1) * 1e6
+            flyVelocity.Velocity = Vector3.new(0, 0, 0)
             flyVelocity.Parent = hrp
         end
+        
         local cam = workspace.CurrentCamera
-        flyVelocity.Velocity = (cam.CFrame.LookVector * (game:GetService("UserInputService"):IsKeyDown(Enum.KeyCode.W) and Options.FlySpeed.Value or 0)) 
-                             + (cam.CFrame.RightVector * (game:GetService("UserInputService"):IsKeyDown(Enum.KeyCode.D) and Options.FlySpeed.Value or 0))
-                             - (cam.CFrame.RightVector * (game:GetService("UserInputService"):IsKeyDown(Enum.KeyCode.A) and Options.FlySpeed.Value or 0))
+        local moveDir = Vector3.new(0, 0, 0)
+        local speed = Options.FlySpeed.Value
+
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+            moveDir = moveDir + cam.CFrame.LookVector
+        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+            moveDir = moveDir - cam.CFrame.LookVector
+        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+            moveDir = moveDir + cam.CFrame.RightVector
+        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+            moveDir = moveDir - cam.CFrame.RightVector
+        end
+
+        flyVelocity.Velocity = moveDir * speed
     else
-        if flyVelocity then flyVelocity:Destroy() flyVelocity = nil end
+        if flyVelocity then 
+            flyVelocity:Destroy() 
+            flyVelocity = nil 
+        end
     end
 
-    -- WalkSpeed & JumpPower 업데이트
-    hum.WalkSpeed = Options.WalkSpeed.Value
-    hum.JumpPower = Options.JumpPower.Value
+    -- WalkSpeed 적용 (개별 토글 켜졌을 때만)
+    if Toggles.WalkSpeedToggle.Value then
+        hum.WalkSpeed = Options.WalkSpeed.Value
+    end
 
-    -- Slide Boost (간단한 예시: 이동 방향으로 속도 증폭)
+    -- JumpPower 적용 (개별 토글 켜졌을 때만)
+    if Toggles.JumpPowerToggle.Value then
+        hum.JumpPower = Options.JumpPower.Value
+    end
+
+    -- Slide Boost 개선 로직
     if Toggles.SlideBoost.Value and hum.MoveDirection.Magnitude > 0 then
-        hrp.Velocity = hrp.Velocity + (hrp.CFrame.LookVector * Options.BoostForce.Value)
+        local boost = Options.BoostForce.Value
+        hrp.AssemblyLinearVelocity = hrp.AssemblyLinearVelocity + (hum.MoveDirection * boost)
     end
 end)
 
--- 5. 시스템 설정
+-- 5. 시스템 설정 (Settings 탭)
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
 
