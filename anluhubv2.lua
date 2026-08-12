@@ -1,40 +1,38 @@
 --[[
-    Anlu Hub v2 - RIVALS IMMORTAL EDITION
-    Bypass: Super Anti-Kick (Blocks all self-kicks)
-    Optimized for Rivals - No Spread, Rapid Fire, Silent Aim
+    Anlu Hub v2 - RIVALS ULTIMATE GHOST FINAL
+    Pure Edition (No LPH, No Self-Kick)
+    Features: Desync, Extreme Void Spam, Silent Aim, Rapid Fire
+    Made by Anlu-Dev & Manus
 ]]
 
--- [0. Super Anti-Kick - 절대 튕기지 않는 방어막]
+-- [0. Pure Bypass - 우리만의 완벽한 우회 로직]
 local Players = cloneref(game:GetService("Players"))
 local LocalPlayer = Players.LocalPlayer
-
-local oldKick
-oldKick = hookfunction(game.Players.LocalPlayer.Kick, function(self, ...)
-    local args = {...}
-    local kickMsg = tostring(args[1] or "")
-    
-    -- 자가 킥 메시지(AethSec, Bypass failed 등)가 포함되면 무조건 차단
-    if kickMsg:find("AethSec") or kickMsg:find("Bypass") or kickMsg:find("failed") or not checkcaller() then
-        warn("[Immortal Bypass] 킥 시도를 감지하고 차단했어! 메시지: " .. kickMsg)
-        return nil
-    end
-    
-    return oldKick(self, ...)
-end)
-
--- [1. Rivals Core Optimization]
 local RunService = cloneref(game:GetService("RunService"))
 local UserInputService = cloneref(game:GetService("UserInputService"))
+local ReplicatedStorage = cloneref(game:GetService("ReplicatedStorage"))
 local Camera = workspace.CurrentCamera
 local Mouse = LocalPlayer:GetMouse()
 
--- Silent Aim & Remote Protection
+-- 1. Super Anti-Kick (안티치트의 킥 명령을 무시)
+local oldKick
+oldKick = hookfunction(LocalPlayer.Kick, function(self, ...)
+    if not checkcaller() then 
+        warn("[Ultimate Bypass] 킥 시도를 차단했어! 🛡️")
+        return nil 
+    end
+    return oldKick(self, ...)
+end)
+
+-- 2. Remote & Silent Aim Protection
 local rawMetatable = getrawmetatable(game)
 local oldNamecall = rawMetatable.__namecall
 local oldIndex = rawMetatable.__index
 setreadonly(rawMetatable, false)
 
 _G.CurrentTargetPart = nil
+_G.RageActive = false
+_G.GhostPos = nil
 
 rawMetatable.__namecall = newcclosure(function(self, ...)
     local method = getnamecallmethod()
@@ -49,7 +47,7 @@ rawMetatable.__namecall = newcclosure(function(self, ...)
         
         -- 안티치트 리모트 차단
         local name = tostring(self)
-        if name:find("AntiCheat") or name:find("Check") or name:find("Kick") then
+        if name:find("AntiCheat") or name:find("Check") or name:find("Kick") or name:find("Ban") then
             return nil
         end
     end
@@ -68,29 +66,30 @@ rawMetatable.__index = newcclosure(function(self, index)
 end)
 setreadonly(rawMetatable, true)
 
--- [[ 2. 라이브러리 및 UI ]]
+-- [[ 1. 라이브러리 및 UI 로딩 ]]
 local function SafeHttpGet(url)
     local success, res = pcall(function() return game:HttpGet(url, true) end)
     return success and res or nil
 end
 
 local libRaw = SafeHttpGet('https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/Library.lua') or SafeHttpGet('https://raw.githubusercontent.com/wally-rblx/LinoriaLib/main/Library.lua')
-if not libRaw then return warn("[Anlu Hub] 라이브러리 로드 실패.") end
+if not libRaw then return warn("[Anlu Hub] UI 로드 실패.") end
 local Library = loadstring(libRaw)()
 
-local Window = Library:CreateWindow({ Title = 'Anlu Hub | RIVALS IMMORTAL', Center = true, AutoShow = true })
+local Window = Library:CreateWindow({ Title = 'Anlu Hub | RIVALS ULTIMATE GHOST', Center = true, AutoShow = true })
 local Tabs = { Main = Window:AddTab('Main'), Character = Window:AddTab('Character'), Settings = Window:AddTab('Settings') }
 
 local RageGroup = Tabs.Main:AddLeftGroupbox('360 Rage Bot')
 RageGroup:AddToggle('RageEnabled', {Text = 'Enable Rage Bot', Default = false})
 RageGroup:AddToggle('VoidSpam', {Text = 'Enable Void Spam', Default = false})
+RageGroup:AddToggle('DesyncEnabled', {Text = 'Enable Desync (Soul Out)', Default = true})
 
 local TargetGroup = Tabs.Main:AddRightGroupbox('Target Settings')
 TargetGroup:AddDropdown('TargetPart', { Values = {'Head', 'HumanoidRootPart'}, Default = 1, Text = 'Target Part' })
 TargetGroup:AddSlider('RageRange', {Text = 'Max Range', Default = 10000, Min = 100, Max = 99999})
 TargetGroup:AddSlider('TPHeight', {Text = 'TP Height', Default = 5, Min = 1, Max = 15})
 
--- [[ 3. 무기 시스템 후킹 ]]
+-- [[ 2. 무기 시스템 후킹 ]]
 local OriginalStats = {}
 local clientItemModule = require(LocalPlayer.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.ClientItem)
 local oldInput; oldInput = hookfunction(clientItemModule.Input, function(...)
@@ -107,7 +106,7 @@ local oldInput; oldInput = hookfunction(clientItemModule.Input, function(...)
     return oldInput(...)
 end)
 
--- [[ 4. 타겟팅 및 메인 루프 ]]
+-- [[ 3. 타겟팅 및 유체이탈 로직 ]]
 local function GetValidTarget()
     local maxDist = Options.RageRange.Value
     local closestPart = nil
@@ -128,6 +127,9 @@ local function GetValidTarget()
     return closestPart
 end
 
+local ghostPart = Instance.new("Part")
+ghostPart.Transparency = 1; ghostPart.CanCollide = false; ghostPart.Anchored = true; ghostPart.Parent = workspace
+
 local voidState = "Attack"
 local lastStateChange = os.clock()
 
@@ -136,19 +138,40 @@ RunService.Heartbeat:Connect(function()
     local char = LocalPlayer.Character
     if not char or not char:FindFirstChild("HumanoidRootPart") then return end
     local hrp = char.HumanoidRootPart
+    local hum = char:FindFirstChild("Humanoid")
     
     _G.CurrentTargetPart = GetValidTarget()
 
     if _G.RageActive and _G.CurrentTargetPart then
         local targetPos = _G.CurrentTargetPart.Position
         local abovePos = targetPos + Vector3.new(0, Options.TPHeight.Value, 0)
+        
+        -- 1. Desync (Soul Out)
+        if Toggles.DesyncEnabled.Value then
+            if not _G.GhostPos then _G.GhostPos = hrp.CFrame end
+            Camera.CameraSubject = ghostPart; ghostPart.CFrame = _G.GhostPos
+            local moveDir = Vector3.zero
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir += Camera.CFrame.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir -= Camera.CFrame.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir -= Camera.CFrame.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir += Camera.CFrame.RightVector end
+            _G.GhostPos = _G.GhostPos + (moveDir * 0.5)
+        else
+            _G.GhostPos = nil; Camera.CameraSubject = hum
+        end
+
         Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, targetPos)
 
+        -- 2. Extreme Void Spam
         if Toggles.VoidSpam.Value then
             local now = os.clock()
             if voidState == "Attack" then
                 if (now - lastStateChange >= 0.1) then 
-                    voidState = "Hide"; lastStateChange = now; hrp.CFrame = CFrame.new(targetPos.X, -100, targetPos.Z)
+                    voidState = "Hide"; lastStateChange = now
+                    local randX = math.random(100000000, 1000000000) * (math.random(0,1) == 0 and 1 or -1)
+                    local randY = math.random(100000000, 1000000000) * (math.random(0,1) == 0 and 1 or -1)
+                    local randZ = math.random(100000000, 1000000000) * (math.random(0,1) == 0 and 1 or -1)
+                    hrp.CFrame = CFrame.new(randX, randY, randZ)
                 else
                     hrp.CFrame = CFrame.lookAt(abovePos, targetPos) * CFrame.Angles(math.rad(-90), 0, 0)
                     local tool = char:FindFirstChildOfClass("Tool"); if tool then tool:Activate() end
@@ -156,20 +179,27 @@ RunService.Heartbeat:Connect(function()
             else
                 if (now - lastStateChange >= 0.05) then 
                     voidState = "Attack"; lastStateChange = now
-                else hrp.CFrame = CFrame.new(targetPos.X, -100, targetPos.Z) end
+                else
+                    local randX = math.random(100000000, 1000000000) * (math.random(0,1) == 0 and 1 or -1)
+                    local randY = math.random(100000000, 1000000000) * (math.random(0,1) == 0 and 1 or -1)
+                    local randZ = math.random(100000000, 1000000000) * (math.random(0,1) == 0 and 1 or -1)
+                    hrp.CFrame = CFrame.new(randX, randY, randZ)
+                end
             end
         else
             hrp.CFrame = CFrame.lookAt(abovePos, targetPos) * CFrame.Angles(math.rad(-90), 0, 0)
             local tool = char:FindFirstChildOfClass("Tool"); if tool then tool:Activate() end
         end
         hrp.AssemblyLinearVelocity = Vector3.zero
+    else
+        Camera.CameraSubject = hum; _G.GhostPos = nil
     end
 end)
 
--- [[ 5. 이동 기능 ]]
+-- [[ 4. 기타 이동 ]]
 local CharGroup = Tabs.Character:AddLeftGroupbox('Movement')
 CharGroup:AddToggle('Fly', {Text = 'Fly'})
 CharGroup:AddSlider('FlySpeed', {Text = 'Fly Speed', Default = 50, Min = 10, Max = 200})
 
 Library.ToggleKeybind = Options.MenuKeybind
-print("[Anlu Hub] Rivals Immortal Edition Loaded! 🚀✨")
+print("[Anlu Hub] Rivals Ultimate Ghost Final Loaded! 🚀👻✨")
