@@ -28,7 +28,7 @@ local Tabs = {
     Settings = Window:AddTab('Settings'),
 }
 
--- 3. Character 탭 구성 (좌측: 이동, 우측: Anti Aim)
+-- 3. Character 탭 구성
 local CharGroup = Tabs.Character:AddLeftGroupbox('Movement')
 local AAGroup = Tabs.Character:AddRightGroupbox('Anti Aim')
 
@@ -47,14 +47,15 @@ CharGroup:AddSlider('BoostForce', {Text = 'Boost Power', Default = 3, Min = 1, M
 -- [Anti Aim 섹션]
 AAGroup:AddToggle('AAEnabled', {Text = 'Enable Anti Aim'})
 
--- Yaw 설정
+-- Yaw 설정 (몸통 각도 제한 추가)
 AAGroup:AddDropdown('YawMode', {
-    Values = {'Static', 'Spin', 'Random', 'Extended Random'},
+    Values = {'Static', 'Jitter', 'Random', 'Extended Random'},
     Default = 1,
     Multi = false,
     Text = 'Yaw Mode'
 })
-AAGroup:AddSlider('YawSpeed', {Text = 'Yaw Speed / Jitter', Default = 10, Min = 1, Max = 50, Rounding = 0})
+AAGroup:AddSlider('YawAngle', {Text = 'Torso Yaw Limit', Default = 30, Min = 0, Max = 90, Rounding = 0})
+AAGroup:AddSlider('YawSpeed', {Text = 'Yaw Speed / Jitter Speed', Default = 10, Min = 1, Max = 50, Rounding = 0})
 
 -- Pitch 설정
 AAGroup:AddDropdown('PitchMode', {
@@ -110,30 +111,32 @@ RunService.RenderStepped:Connect(function(delta)
         hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (boost * delta))
     end
 
-    -- [4] Anti Aim (머리 & 몸통 관절 회전)
+    -- [4] Anti Aim (몸통 미세 회전 제어)
     local rootJoint = hrp:FindFirstChild("RootJoint") or (char:FindFirstChild("LowerTorso") and char.LowerTorso:FindFirstChild("Root"))
     local neck = (char:FindFirstChild("Torso") and char.Torso:FindFirstChild("Neck")) or (char:FindFirstChild("Head") and char.Head:FindFirstChild("Neck")) or (char:FindFirstChild("UpperTorso") and char.UpperTorso:FindFirstChild("Neck"))
 
     if Toggles.AAEnabled.Value and rootJoint and neck then
-        -- 원본 C0 저장
         if not originalRootC0 then originalRootC0 = rootJoint.C0 end
         if not originalNeckC0 then originalNeckC0 = neck.C0 end
 
         local yaw = 0
         local pitch = 0
         local speed = Options.YawSpeed.Value
+        local yawLimit = Options.YawAngle.Value
 
-        -- Yaw 연산 (가로 회전)
+        -- Yaw 연산 (지정한 몸통 각도 범위 내에서만 작동)
         local yMode = Options.YawMode.Value
-        if yMode == 'Spin' then
-            yaw = math.rad((tick() * speed * 50) % 360)
+        if yMode == 'Static' then
+            yaw = math.rad(yawLimit)
+        elseif yMode == 'Jitter' then
+            yaw = math.rad(math.sin(tick() * speed) * yawLimit)
         elseif yMode == 'Random' then
-            yaw = math.rad(math.random(-180, 180))
+            yaw = math.rad(math.random(-yawLimit, yawLimit))
         elseif yMode == 'Extended Random' then
-            yaw = math.rad(math.random(-360, 360))
+            yaw = math.rad(math.random(-yawLimit * 2, yawLimit * 2))
         end
 
-        -- Pitch 연산 (세로 꺾임)
+        -- Pitch 연산
         local pMode = Options.PitchMode.Value
         if pMode == 'Up' then
             pitch = math.rad(-89)
@@ -147,11 +150,9 @@ RunService.RenderStepped:Connect(function(delta)
             pitch = math.rad(Options.PitchAngle.Value)
         end
 
-        -- 몸통(RootJoint)과 머리(Neck)에만 회전 값 적용
         rootJoint.C0 = originalRootC0 * CFrame.Angles(0, 0, yaw)
         neck.C0 = originalNeckC0 * CFrame.Angles(pitch, 0, 0)
     else
-        -- Anti-Aim 비활성화 시 원본 상태로 복구
         if originalRootC0 and rootJoint then
             rootJoint.C0 = originalRootC0
             originalRootC0 = nil
