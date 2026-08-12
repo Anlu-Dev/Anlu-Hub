@@ -50,7 +50,7 @@ local RageGroup = Tabs.Main:AddLeftGroupbox('360 Rage Bot')
 local TargetGroup = Tabs.Main:AddRightGroupbox('Rage Target Settings')
 
 RageGroup:AddToggle('RageEnabled', {Text = 'Enable Rage Bot'})
-RageGroup:AddToggle('TargetTP', {Text = 'TP Above Target (적 위 텔레포트)', Default = true})
+RageGroup:AddToggle('TargetTP', {Text = 'TP Above Target (적 밀착 텔레포트)', Default = true})
 RageGroup:AddToggle('SilentAim', {Text = '360° Silent Aim', Default = true})
 RageGroup:AddToggle('AutoShoot', {Text = 'Auto Fire', Default = true})
 
@@ -60,7 +60,9 @@ TargetGroup:AddDropdown('TargetPart', {
     Multi = false,
     Text = 'Target Part'
 })
-TargetGroup:AddSlider('TPHeight', {Text = 'TP Height Above Enemy', Default = 10, Min = 3, Max = 30, Rounding = 0})
+
+-- 높이를 아주 조밀하게 조절할 수 있도록 수정 (기본 3 스터드, 1~15 범위, 소수점 지원)
+TargetGroup:AddSlider('TPHeight', {Text = 'TP Height Above Enemy', Default = 3, Min = 1, Max = 15, Rounding = 1})
 TargetGroup:AddSlider('RageRange', {Text = 'Max Detection Range', Default = 500, Min = 50, Max = 2000, Rounding = 0})
 
 -- [Character 탭]
@@ -128,9 +130,6 @@ local function Get360Target()
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
-            -- 팀 체크 (필요 시 주석 해제)
-            -- if player.Team == LocalPlayer.Team then continue end
-
             local hum = player.Character:FindFirstChildOfClass("Humanoid")
             if hum and hum.Health > 0 then
                 local partName = Options.TargetPart.Value
@@ -149,7 +148,7 @@ local function Get360Target()
     return closestTarget
 end
 
--- 5. Silent Aim 메타테이블 후킹 (Mouse.Hit / Target 조준 연동)
+-- 5. Silent Aim 메타테이블 후킹
 local rawMetatable = getrawmetatable(game)
 local oldIndex = rawMetatable.__index
 setreadonly(rawMetatable, false)
@@ -169,7 +168,7 @@ end)
 
 setreadonly(rawMetatable, true)
 
--- 6. 메인 프레임 루프 (Stepped: 위치 / 이동 / TP 처리)
+-- 6. 메인 프레임 루프
 RunService.Stepped:Connect(function(_, delta)
     local char = LocalPlayer.Character
     if not char then return end
@@ -180,7 +179,7 @@ RunService.Stepped:Connect(function(_, delta)
     -- 타깃 탐색
     CurrentTargetPart = Get360Target()
 
-    -- [Rage Bot: 적 상공 TP & 땅 보고 눕는 자세]
+    -- [Rage Bot: 적 상공 밀착 TP & 땅 보고 눕는 자세]
     if Toggles.RageEnabled.Value and CurrentTargetPart then
         if Toggles.TargetTP.Value then
             local targetPos = CurrentTargetPart.Position
@@ -189,7 +188,7 @@ RunService.Stepped:Connect(function(_, delta)
 
             -- 적을 바라보면서 피치 -90도로 공중에 눕는 CFrame 적용
             hrp.CFrame = CFrame.lookAt(abovePos, targetPos) * CFrame.Angles(math.rad(-90), 0, 0)
-            hrp.AssemblyLinearVelocity = Vector3.zero -- 중력 대기
+            hrp.AssemblyLinearVelocity = Vector3.zero
         end
 
         -- 자동 사격
@@ -229,7 +228,7 @@ RunService.Stepped:Connect(function(_, delta)
         hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (boost * delta))
     end
 
-    -- [Anti Aim (Rage Bot TP 미작동 시 적용)]
+    -- [Anti Aim]
     if Toggles.AAEnabled.Value and not (Toggles.RageEnabled.Value and CurrentTargetPart and Toggles.TargetTP.Value) then
         local yaw = 0
         local pitch = 0
