@@ -23,6 +23,7 @@ local SaveManager = loadstring(saveRaw)()
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local VirtualUser = game:GetService("VirtualUser")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
@@ -247,45 +248,49 @@ end)
 
 setreadonly(rawMetatable, true)
 
--- 7. 10스터드 이내 클릭 리모트(RemoteEvent) 직접 발동 사격 함수
-local function TriggerAutoShoot(targetPart)
-    local char = LocalPlayer.Character
-    if not char or not targetPart then return end
-    local tool = char:FindFirstChildOfClass("Tool")
-    local myHRP = char:FindFirstChild("HumanoidRootPart")
-    if not tool or not myHRP then return end
+-- 7. 직접 물리 마우스 클릭 트리거 함수
+local isShooting = false
 
-    local distance = (myHRP.Position - targetPart.Position).Magnitude
+local function TriggerDirectMouseClick()
+    if isShooting then return end
+    isShooting = true
 
-    -- [핵심] 적과의 거리가 10스터드 이내일 때: Tool 내 리모트 이벤트 직접 실행
-    if distance <= 10 then
-        for _, v in ipairs(tool:GetDescendants()) do
-            if v:IsA("RemoteEvent") then
-                pcall(function()
-                    v:FireServer(targetPart.Position, targetPart)
-                    v:FireServer(targetPart)
-                    v:FireServer()
-                end)
-            elseif v:IsA("RemoteFunction") then
-                pcall(function()
-                    v:InvokeServer(targetPart.Position, targetPart)
-                end)
+    task.spawn(function()
+        local char = LocalPlayer.Character
+        if char then
+            local tool = char:FindFirstChildOfClass("Tool")
+            if tool then
+                tool:Activate()
             end
         end
-    end
 
-    -- 기본 도구 활성화 및 마우스 입력 주입 (2중 보장)
-    tool:Activate()
-    pcall(function()
+        -- 방법 1: 실행기 네이티브 C-Level 클릭 입력 (mouse1press / mouse1release)
         if mouse1press then
             mouse1press()
-            task.delay(0.01, function() pcall(mouse1release) end)
-        else
-            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-            task.delay(0.01, function()
-                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-            end)
+            task.wait(0.02)
+            pcall(mouse1release)
+        elseif mouse1click then
+            mouse1click()
         end
+
+        -- 방법 2: VirtualUser를 통한 직접 마우스 클릭
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:Button1Down(Vector2.zero)
+            task.wait(0.02)
+            VirtualUser:Button1Up(Vector2.zero)
+        end)
+
+        -- 방법 3: VirtualInputManager 화면 중앙 마우스 클릭 이벤트 주입
+        pcall(function()
+            local vp = Camera.ViewportSize
+            VirtualInputManager:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, true, game, 0)
+            task.wait(0.02)
+            VirtualInputManager:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, false, game, 0)
+        end)
+
+        task.wait(0.03)
+        isShooting = false
     end)
 end
 
@@ -315,9 +320,9 @@ RunService.Stepped:Connect(function(_, delta)
             hrp.AssemblyLinearVelocity = Vector3.zero
         end
 
-        -- 자동 발사 (목표 타깃 부위 전달)
+        -- 직접 마우스 클릭 실행
         if Toggles.AutoShoot.Value then
-            TriggerAutoShoot(CurrentTargetPart)
+            TriggerDirectMouseClick()
         end
     end
 
@@ -384,7 +389,7 @@ end)
 
 -- 무한 점프
 UserInputService.JumpRequest:Connect(function()
-    if Toggles.JumpEnabled.Value and LocalPlayer.Character me then
+    if Toggles.JumpEnabled.Value and LocalPlayer.Character then
         local hum = LocalPlayer.Character:FindFirstChild("Humanoid")
         if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
     end
