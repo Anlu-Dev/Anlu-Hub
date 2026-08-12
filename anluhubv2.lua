@@ -1,4 +1,4 @@
--- 1. 안전한 HttpGet 및 라이브러리 로드 (공식 LinoriaLib로 통일)
+-- 1. 안전한 HttpGet 및 공식 LinoriaLib 로드
 local function SafeHttpGet(url)
     local success, result = pcall(function()
         return game:HttpGet(url, true)
@@ -53,6 +53,11 @@ local TargetGroup = Tabs.Main:AddRightGroupbox('Rage Target Settings')
 
 RageGroup:AddToggle('RageEnabled', {Text = 'Enable Rage Bot', Default = false})
 RageGroup:AddToggle('VoidSpam', {Text = 'Enable Void Spam', Default = false})
+
+-- 실시간 타깃 확인 라벨
+local TargetStatusLabel = TargetGroup:AddLabel('Target Status: None')
+
+TargetGroup:AddToggle('TeamCheck', {Text = 'Team Check (팀전 게임에서만 ON)', Default = false})
 
 TargetGroup:AddDropdown('TargetPart', {
     Values = {'Head', 'HumanoidRootPart', 'Torso'},
@@ -121,11 +126,10 @@ end
 if LocalPlayer.Character then UpdateCache(LocalPlayer.Character) end
 LocalPlayer.CharacterAdded:Connect(UpdateCache)
 
--- 4. 필터링 및 유효 적 검사
+-- 4. 필터링 및 유효 적 검사 (수정완료)
 local function IsInvincibleOrImmune(character)
     if not character then return true end
     if character:FindFirstChildOfClass("ForceField") then return true end
-    if character:FindFirstChild("SpawnProtection") or character:FindFirstChild("Shield") or character:FindFirstChild("Invincible") or character:FindFirstChild("GodMode") then return true end
     
     local hum = character:FindFirstChildOfClass("Humanoid")
     if not hum or hum.Health <= 0 then return true end
@@ -135,11 +139,11 @@ end
 
 local function IsTeammate(player)
     if player == LocalPlayer then return true end
-    if LocalPlayer.Team ~= nil and player.Team ~= nil then
-        return player.Team == LocalPlayer.Team
-    end
-    if LocalPlayer.TeamColor == player.TeamColor then
-        return true
+    -- Team Check 토글이 켜져있을 때만 팀원 판정
+    if Toggles.TeamCheck and Toggles.TeamCheck.Value then
+        if LocalPlayer.Team ~= nil and player.Team ~= nil then
+            return player.Team == LocalPlayer.Team
+        end
     end
     return false
 end
@@ -148,8 +152,8 @@ local CurrentTargetPart = nil
 local CurrentTargetPlayer = nil
 
 local function GetValidTarget()
-    if not Toggles.RageEnabled.Value then return nil, nil end
-    local maxDistance = Options.RageRange.Value
+    if not (Toggles.RageEnabled and Toggles.RageEnabled.Value) then return nil, nil end
+    local maxDistance = Options.RageRange and Options.RageRange.Value or 99999
     local closestPart = nil
     local closestPlayer = nil
     local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
@@ -159,8 +163,8 @@ local function GetValidTarget()
         if not IsTeammate(player) and player.Character then
             local char = player.Character
             if not IsInvincibleOrImmune(char) then
-                local partName = Options.TargetPart.Value
-                local targetPart = char:FindFirstChild(partName) or char:FindFirstChild("HumanoidRootPart")
+                local partName = Options.TargetPart and Options.TargetPart.Value or 'Head'
+                local targetPart = char:FindFirstChild(partName) or char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
                 
                 if targetPart then
                     local dist = (targetPart.Position - myHRP.Position).Magnitude
@@ -223,12 +227,11 @@ end)
 
 setreadonly(rawMetatable, true)
 
--- 6. 최적화 및 타임아웃 방지 처리된 초고속 자동 발사
+-- 6. 최적화된 자동 발사
 local lastShootTime = 0
 
 local function BuffedAutoShoot(targetPart)
     local now = os.clock()
-    -- 과부하 방지 쿨다운 (0.03초 간격 = 초당 약 33발 사격)
     if now - lastShootTime < 0.03 then return end
     lastShootTime = now
 
@@ -237,7 +240,6 @@ local function BuffedAutoShoot(targetPart)
     local hum = char:FindFirstChildOfClass("Humanoid")
     local tool = char:FindFirstChildOfClass("Tool")
     
-    -- 무기 자동 장착
     if not tool and hum then
         local backpackTool = LocalPlayer.Backpack:FindFirstChildOfClass("Tool")
         if backpackTool then
@@ -250,7 +252,6 @@ local function BuffedAutoShoot(targetPart)
         tool:Activate()
     end
 
-    -- 하드웨어 마우스 클릭 주입
     pcall(function()
         if mouse1press then
             mouse1press()
@@ -271,19 +272,32 @@ local function BuffedAutoShoot(targetPart)
     end)
 end
 
--- 7. 메인 프레임 루프 (타이머 기반 Void Spam)
+-- 7. 메인 프레임 루프 (Heartbeat 기반 안정적 동작)
 local voidState = "Attack"
 local lastStateChange = os.clock()
 
-RunService.Stepped:Connect(function(_, delta)
+RunService.Heartbeat:Connect(function()
     local char = LocalPlayer.Character
-    if not char then return end
+    if not char then 
+        TargetStatusLabel:SetText('Target Status: None')
+        return 
+    end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChild("Humanoid")
-    if not hrp or not hum or hum.Health <= 0 then return end
+    if not hrp or not hum or hum.Health <= 0 then 
+        TargetStatusLabel:SetText('Target Status: None')
+        return 
+    end
 
     -- 타깃 탐색
     CurrentTargetPart, CurrentTargetPlayer = GetValidTarget()
+
+    -- 실시간 UI 라벨 업데이트
+    if CurrentTargetPlayer then
+        TargetStatusLabel:SetText('Target Status: ' .. CurrentTargetPlayer.Name)
+    else
+        TargetStatusLabel:SetText('Target Status: None')
+    end
 
     -- [Rage Bot 동작]
     if Toggles.RageEnabled.Value and CurrentTargetPart then
@@ -296,7 +310,6 @@ RunService.Stepped:Connect(function(_, delta)
             local hideTime = Options.HideTime.Value
             local attackTime = Options.AttackTime.Value
 
-            -- 시간 단위 상태 전환
             if voidState == "Attack" and (now - lastStateChange >= attackTime) then
                 voidState = "Hide"
                 lastStateChange = now
@@ -306,20 +319,15 @@ RunService.Stepped:Connect(function(_, delta)
             end
 
             if voidState == "Hide" then
-                -- 보이드 위치로 텔레포트
                 hrp.CFrame = CFrame.new(0, -500, 0)
             else
-                -- 적 상공 위치로 텔레포트
                 hrp.CFrame = CFrame.lookAt(abovePos, targetPos) * CFrame.Angles(math.rad(-90), 0, 0)
             end
         else
-            -- 일반 상공 TP
             hrp.CFrame = CFrame.lookAt(abovePos, targetPos) * CFrame.Angles(math.rad(-90), 0, 0)
         end
 
         hrp.AssemblyLinearVelocity = Vector3.zero
-
-        -- 자동 발사
         BuffedAutoShoot(CurrentTargetPart)
     end
 
@@ -339,18 +347,18 @@ RunService.Stepped:Connect(function(_, delta)
         if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir -= Vector3.new(0, 1, 0) end
 
         if moveDir.Magnitude > 0 then
-            hrp.CFrame = hrp.CFrame + (moveDir.Unit * (speed * delta))
+            hrp.CFrame = hrp.CFrame + (moveDir.Unit * (speed * 0.016))
         end
     end
 
     if Toggles.SpeedEnabled.Value and not Toggles.Fly.Value and hum.MoveDirection.Magnitude > 0 then
         local extraSpeed = (Options.WalkSpeed.Value - 1) * 16
-        hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (extraSpeed * delta))
+        hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (extraSpeed * 0.016))
     end
 
     if Toggles.SlideBoost.Value and not Toggles.Fly.Value and hum.MoveDirection.Magnitude > 0 then
         local boost = Options.BoostForce.Value * 5
-        hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (boost * delta))
+        hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (boost * 0.016))
     end
 
     -- [Anti Aim]
