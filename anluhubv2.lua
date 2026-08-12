@@ -1,4 +1,4 @@
--- 1. 안전한 HttpGet
+-- 1. 안전한 HttpGet 및 라이브러리 로드 (공식 LinoriaLib로 통일)
 local function SafeHttpGet(url)
     local success, result = pcall(function()
         return game:HttpGet(url, true)
@@ -7,10 +7,10 @@ local function SafeHttpGet(url)
     return nil
 end
 
-local repo = 'https://raw.githubusercontent.com/Anlu-Dev/Library/refs/heads/main/'
+local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
 local libRaw = SafeHttpGet(repo .. 'Library.lua')
-local themeRaw = SafeHttpGet('https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/addons/ThemeManager.lua')
-local saveRaw = SafeHttpGet('https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/addons/SaveManager.lua')
+local themeRaw = SafeHttpGet(repo .. 'addons/ThemeManager.lua')
+local saveRaw = SafeHttpGet(repo .. 'addons/SaveManager.lua')
 
 if not libRaw or not themeRaw or not saveRaw then
     return warn("[Eclipse Core] 라이브러리 불러오기 실패.")
@@ -223,59 +223,51 @@ end)
 
 setreadonly(rawMetatable, true)
 
--- 6. 버프된 초고속 자동 발사 (Super Fast Auto Shoot)
+-- 6. 최적화 및 타임아웃 방지 처리된 초고속 자동 발사
+local lastShootTime = 0
+
 local function BuffedAutoShoot(targetPart)
-    task.spawn(function()
-        local char = LocalPlayer.Character
-        if not char then return end
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        local tool = char:FindFirstChildOfClass("Tool")
-        
-        -- 가방에서 자동 장착
-        if not tool and hum then
-            local backpackTool = LocalPlayer.Backpack:FindFirstChildOfClass("Tool")
-            if backpackTool then
-                hum:EquipTool(backpackTool)
-                tool = backpackTool
-            end
+    local now = os.clock()
+    -- 과부하 방지 쿨다운 (0.03초 간격 = 초당 약 33발 사격)
+    if now - lastShootTime < 0.03 then return end
+    lastShootTime = now
+
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local tool = char:FindFirstChildOfClass("Tool")
+    
+    -- 무기 자동 장착
+    if not tool and hum then
+        local backpackTool = LocalPlayer.Backpack:FindFirstChildOfClass("Tool")
+        if backpackTool then
+            hum:EquipTool(backpackTool)
+            tool = backpackTool
         end
+    end
 
-        if tool then
-            tool:Activate()
-            
-            -- 초고속 리모트 강제 트리거 (ACS/GunKit 바이패스)
-            for _, v in ipairs(tool:GetDescendants()) do
-                if v:IsA("RemoteEvent") then
-                    pcall(function()
-                        if targetPart then
-                            v:FireServer(targetPart.Position, targetPart)
-                            v:FireServer(targetPart)
-                        end
-                        v:FireServer()
-                    end)
-                end
-            end
+    if tool then
+        tool:Activate()
+    end
+
+    -- 하드웨어 마우스 클릭 주입
+    pcall(function()
+        if mouse1press then
+            mouse1press()
+            mouse1release()
         end
+    end)
 
-        -- 물리 C-Level 연사
-        pcall(function()
-            if mouse1press then
-                mouse1press()
-                mouse1release()
-            end
-        end)
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:Button1Down(Vector2.zero)
+        VirtualUser:Button1Up(Vector2.zero)
+    end)
 
-        pcall(function()
-            VirtualUser:CaptureController()
-            VirtualUser:Button1Down(Vector2.zero)
-            VirtualUser:Button1Up(Vector2.zero)
-        end)
-
-        pcall(function()
-            local vp = Camera.ViewportSize
-            VirtualInputManager:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, true, game, 0)
-            VirtualInputManager:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, false, game, 0)
-        end)
+    pcall(function()
+        local vp = Camera.ViewportSize
+        VirtualInputManager:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, true, game, 0)
+        VirtualInputManager:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, false, game, 0)
     end)
 end
 
@@ -327,7 +319,7 @@ RunService.Stepped:Connect(function(_, delta)
 
         hrp.AssemblyLinearVelocity = Vector3.zero
 
-        -- 자동 발사 (버프된 초고속 발사)
+        -- 자동 발사
         BuffedAutoShoot(CurrentTargetPart)
     end
 
