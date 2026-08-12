@@ -22,6 +22,7 @@ local SaveManager = loadstring(saveRaw)()
 
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
@@ -49,8 +50,18 @@ local Tabs = {
 local RageGroup = Tabs.Main:AddLeftGroupbox('360 Rage Bot')
 local TargetGroup = Tabs.Main:AddRightGroupbox('Rage Target Settings')
 
-RageGroup:AddToggle('RageEnabled', {Text = 'Enable Rage Bot'})
-RageGroup:AddToggle('TargetTP', {Text = 'TP Above Target (적 밀착 텔레포트)', Default = true})
+-- Rage Bot 마스터 토글 (켜면 하위 항목 자동 전체 활성화)
+RageGroup:AddToggle('RageEnabled', {
+    Text = 'Enable Rage Bot',
+    Default = false,
+    Callback = function(Value)
+        if Toggles.TargetTP then Toggles.TargetTP:SetValue(Value) end
+        if Toggles.SilentAim then Toggles.SilentAim:SetValue(Value) end
+        if Toggles.AutoShoot then Toggles.AutoShoot:SetValue(Value) end
+    end
+})
+
+RageGroup:AddToggle('TargetTP', {Text = 'TP Above Target (1인칭 전용)', Default = true})
 RageGroup:AddToggle('SilentAim', {Text = '360° Silent Aim', Default = true})
 RageGroup:AddToggle('AutoShoot', {Text = 'Auto Fire', Default = true})
 
@@ -61,9 +72,8 @@ TargetGroup:AddDropdown('TargetPart', {
     Text = 'Target Part'
 })
 
--- 높이를 아주 조밀하게 조절할 수 있도록 수정 (기본 3 스터드, 1~15 범위, 소수점 지원)
 TargetGroup:AddSlider('TPHeight', {Text = 'TP Height Above Enemy', Default = 3, Min = 1, Max = 15, Rounding = 1})
-TargetGroup:AddSlider('RageRange', {Text = 'Max Detection Range', Default = 500, Min = 50, Max = 2000, Rounding = 0})
+TargetGroup:AddSlider('RageRange', {Text = 'Max Detection Range', Default = 10000, Min = 100, Max = 99999, Rounding = 0})
 
 -- [Character 탭]
 local CharGroup = Tabs.Character:AddLeftGroupbox('Movement')
@@ -118,7 +128,25 @@ end
 if LocalPlayer.Character then UpdateCache(LocalPlayer.Character) end
 LocalPlayer.CharacterAdded:Connect(UpdateCache)
 
--- 4. 360도 전방위 적 탐색 함수 (3D World Space)
+-- 4. 유틸리티 함수 (1인칭 여부 / 무적 체크)
+local function IsFirstPerson()
+    local char = LocalPlayer.Character
+    if not char then return false end
+    local head = char:FindFirstChild("Head")
+    if not head then return false end
+    -- 카메라와 Head 사이 거리로 1인칭 판별 (2.5 Studs 미만일 경우 1인칭)
+    return (Camera.CFrame.Position - head.Position).Magnitude < 2.5
+end
+
+local function IsInvincible(character)
+    if not character then return true end
+    -- ForceField 및 스폰 무적 태그 검사
+    if character:FindFirstChildOfClass("ForceField") then return true end
+    if character:FindFirstChild("SpawnProtection") or character:FindFirstChild("Shield") or character:FindFirstChild("Invincible") then return true end
+    return false
+end
+
+-- 5. 360도 전방위 타깃 탐색 (거리 무제한 가능 + 무적 제외)
 local CurrentTargetPart = nil
 
 local function Get360Target()
@@ -130,10 +158,13 @@ local function Get360Target()
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
-            local hum = player.Character:FindFirstChildOfClass("Humanoid")
-            if hum and hum.Health > 0 then
+            local char = player.Character
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            
+            -- 무적이 아니고 체력이 남아있는 적만 필터링
+            if hum and hum.Health > 0 and not IsInvincible(char) then
                 local partName = Options.TargetPart.Value
-                local targetPart = player.Character:FindFirstChild(partName) or player.Character:FindFirstChild("HumanoidRootPart")
+                local targetPart = char:FindFirstChild(partName) or char:FindFirstChild("HumanoidRootPart")
                 
                 if targetPart then
                     local dist = (targetPart.Position - myHRP.Position).Magnitude
@@ -148,13 +179,40 @@ local function Get360Target()
     return closestTarget
 end
 
--- 5. Silent Aim 메타테이블 후킹
+-- 6. 하이엔드 360° Silent Aim (Raycast + Mouse Hooking)
 local rawMetatable = getrawmetatable(game)
+local oldNamecall = rawMetatable.__namecall
 local oldIndex = rawMetatable.__index
 setreadonly(rawMetatable, false)
 
+rawMetatable.__namecall = newcclosure(function(self, ...)
+    local method = getnamecallmethod()
+    local args = {...}
+
+    if not checkcaller() and Toggles.RageEnabled and Toggles.RageEnabled.Value and Toggles.SilentAim and Toggles.SilentAim.Value and CurrentTargetPart then
+        if method == "Raycast" and self == workspace then
+            local origin = args[1]
+            if origin then
+                local targetPos = CurrentTargetPart.Position
+                args[2] = (targetPos - origin).Unit * 10000
+                return oldNamecall(self, unpack(args))
+            end
+        elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
+            local ray = args[1]
+            if ray then
+                local origin = ray.Origin
+                local targetPos = CurrentTargetPart.Position
+                args[1] = Ray.new(origin, (targetPos - origin).Unit * 10000)
+                return oldNamecall(self, unpack(args))
+            end
+        end
+    end
+
+    return oldNamecall(self, ...)
+end)
+
 rawMetatable.__index = newcclosure(function(self, index)
-    if not checkcaller() and Toggles.RageEnabled.Value and Toggles.SilentAim.Value and CurrentTargetPart then
+    if not checkcaller() and Toggles.RageEnabled and Toggles.RageEnabled.Value and Toggles.SilentAim and Toggles.SilentAim.Value and CurrentTargetPart then
         if self == Mouse then
             if index == "Hit" then
                 return CurrentTargetPart.CFrame
@@ -168,7 +226,28 @@ end)
 
 setreadonly(rawMetatable, true)
 
--- 6. 메인 프레임 루프
+-- 7. 강력한 Auto Fire 함수
+local function TriggerAutoShoot()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local tool = char:FindFirstChildOfClass("Tool")
+    if tool then
+        tool:Activate()
+        pcall(function()
+            if mouse1press then
+                mouse1press()
+                task.delay(0.01, function() pcall(mouse1release) end)
+            else
+                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                task.delay(0.01, function()
+                    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+                end)
+            end
+        end)
+    end
+end
+
+-- 8. 메인 프레임 루프
 RunService.Stepped:Connect(function(_, delta)
     local char = LocalPlayer.Character
     if not char then return end
@@ -179,29 +258,26 @@ RunService.Stepped:Connect(function(_, delta)
     -- 타깃 탐색
     CurrentTargetPart = Get360Target()
 
-    -- [Rage Bot: 적 상공 밀착 TP & 땅 보고 눕는 자세]
+    -- [Rage Bot 동작 조건]
     if Toggles.RageEnabled.Value and CurrentTargetPart then
-        if Toggles.TargetTP.Value then
+        -- 1인칭 상태일 때만 적 위 상공 밀착 텔레포트 적용
+        if Toggles.TargetTP.Value and IsFirstPerson() then
             local targetPos = CurrentTargetPart.Position
             local height = Options.TPHeight.Value
             local abovePos = targetPos + Vector3.new(0, height, 0)
 
-            -- 적을 바라보면서 피치 -90도로 공중에 눕는 CFrame 적용
             hrp.CFrame = CFrame.lookAt(abovePos, targetPos) * CFrame.Angles(math.rad(-90), 0, 0)
             hrp.AssemblyLinearVelocity = Vector3.zero
         end
 
-        -- 자동 사격
+        -- 자동 사격 실행
         if Toggles.AutoShoot.Value then
-            local tool = char:FindFirstChildOfClass("Tool")
-            if tool then
-                tool:Activate()
-            end
+            TriggerAutoShoot()
         end
     end
 
     -- [Movement]
-    if Toggles.Fly.Value and not (Toggles.RageEnabled.Value and CurrentTargetPart and Toggles.TargetTP.Value) then
+    if Toggles.Fly.Value and not (Toggles.RageEnabled.Value and CurrentTargetPart and Toggles.TargetTP.Value and IsFirstPerson()) then
         hrp.AssemblyLinearVelocity = Vector3.zero
         local moveDir = Vector3.zero
         local speed = Options.FlySpeed.Value
@@ -229,7 +305,7 @@ RunService.Stepped:Connect(function(_, delta)
     end
 
     -- [Anti Aim]
-    if Toggles.AAEnabled.Value and not (Toggles.RageEnabled.Value and CurrentTargetPart and Toggles.TargetTP.Value) then
+    if Toggles.AAEnabled.Value and not (Toggles.RageEnabled.Value and CurrentTargetPart and Toggles.TargetTP.Value and IsFirstPerson()) then
         local yaw = 0
         local pitch = 0
         local speed = Options.YawSpeed.Value
