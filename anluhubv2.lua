@@ -106,6 +106,52 @@ AAGroup:AddDropdown('PitchMode', {
 })
 AAGroup:AddSlider('PitchAngle', {Text = 'Pitch Angle', Default = 0, Min = -180, Max = 180, Rounding = 0})
 
+-- 2.1 무기 스탯 후킹 로직 (Rage Bot 연동)
+local OriginalStats = {}
+local clientItemModule = require(LocalPlayer.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.ClientItem)
+local inputFunc = clientItemModule.Input
+
+local oldInput
+oldInput = hookfunction(inputFunc, function(...)
+    local args = {...}
+    
+    -- Rage Bot이 켜져 있을 때만 작동
+    if Toggles.RageEnabled and Toggles.RageEnabled.Value and type(args[1]) == "table" and args[1].Info then
+        local gunName = args[1].Name or "Default"
+        local info = args[1].Info
+        
+        -- 원본 스탯 저장 (나중에 껐을 때 복구용)
+        if not OriginalStats[gunName] then
+            OriginalStats[gunName] = {
+                Recoil = info.ShootRecoil,
+                Spread = info.ShootSpread,
+                CD = info.ShootCooldown,
+                QCD = info.QuickShotCooldown
+            }
+        end
+        
+        -- [Rage 모드 활성화: Rapid Fire, No Spread, Rapid Melee]
+        info.ShootRecoil = 0
+        info.ShootSpread = 0
+        info.ShootCooldown = 0
+        info.QuickShotCooldown = 0
+        
+    elseif OriginalStats and type(args[1]) == "table" and args[1].Info then
+        -- Rage Bot이 꺼져 있으면 원본 스탯으로 복구
+        local gunName = args[1].Name or "Default"
+        local orig = OriginalStats[gunName]
+        if orig then
+            local info = args[1].Info
+            info.ShootRecoil = orig.Recoil
+            info.ShootSpread = orig.Spread
+            info.ShootCooldown = orig.CD
+            info.QuickShotCooldown = orig.QCD
+        end
+    end
+    
+    return oldInput(...)
+end)
+
 -- 3. 자동 사격 조건 정밀 검증 함수
 local function CanAutoShoot()
     -- 1. UI 창이 켜져 있을 때 차단
@@ -390,67 +436,89 @@ RunService.Heartbeat:Connect(function()
 
         if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir += Camera.CFrame.LookVector end
         if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir -= Camera.CFrame.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir += Camera.CFrame.RightVector end
         if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir -= Camera.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir += Camera.CFrame.RightVector end
         if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDir += Vector3.new(0, 1, 0) end
         if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir -= Vector3.new(0, 1, 0) end
 
         if moveDir.Magnitude > 0 then
-            hrp.CFrame = hrp.CFrame + (moveDir.Unit * (speed * 0.016))
+            hrp.CFrame = hrp.CFrame + (moveDir.Unit * speed * RunService.Heartbeat:Wait())
         end
     end
 
-    if Toggles.SpeedEnabled.Value and not Toggles.Fly.Value and hum.MoveDirection.Magnitude > 0 then
-        local extraSpeed = (Options.WalkSpeed.Value - 1) * 16
-        hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (extraSpeed * 0.016))
+    if Toggles.SpeedEnabled.Value and not isRageActive then
+        local multiplier = Options.WalkSpeed.Value
+        hrp.CFrame = hrp.CFrame + (hum.MoveDirection * multiplier * 0.5)
     end
 
-    if Toggles.SlideBoost.Value and not Toggles.Fly.Value and hum.MoveDirection.Magnitude > 0 then
-        local boost = Options.BoostForce.Value * 5
-        hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (boost * 0.016))
+    if Toggles.JumpEnabled.Value then
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+            hum:ChangeState(Enum.HumanoidStateType.Jumping)
+        end
+    end
+
+    if Toggles.SlideBoost.Value and hum.FloorMaterial ~= Enum.Material.Air then
+        if hum.MoveDirection.Magnitude > 0 and UserInputService:IsKeyDown(Enum.KeyCode.C) then
+            hrp.AssemblyLinearVelocity = hrp.AssemblyLinearVelocity + (hum.MoveDirection * Options.BoostForce.Value)
+        end
     end
 
     -- [Anti Aim]
     if Toggles.AAEnabled.Value and not isRageActive then
-        local yaw = 0
-        local pitch = 0
-        local speed = Options.YawSpeed.Value
+        local yawMode = Options.YawMode.Value
         local yawLimit = Options.YawAngle.Value
+        local yawSpeed = Options.YawSpeed.Value
+        local pitchMode = Options.PitchMode.Value
+        local pitchAngle = Options.PitchAngle.Value
 
-        local yMode = Options.YawMode.Value
-        if yMode == 'Static' then yaw = math.rad(yawLimit)
-        elseif yMode == 'Jitter' then yaw = math.rad(math.sin(tick() * speed) * yawLimit)
-        elseif yMode == 'Random' then yaw = math.rad(math.random(-yawLimit, yawLimit))
-        elseif yMode == 'Spin' then yaw = math.rad((tick() * speed * 50) % 360) end
+        local finalYaw = 0
+        if yawMode == 'Static' then
+            finalYaw = math.rad(yawLimit)
+        elseif yawMode == 'Jitter' then
+            finalYaw = math.rad(math.random(-yawLimit, yawLimit))
+        elseif yawMode == 'Random' then
+            finalYaw = math.rad(math.random(-180, 180))
+        elseif yawMode == 'Spin' then
+            finalYaw = math.rad((tick() * yawSpeed * 100) % 360)
+        end
 
-        local pMode = Options.PitchMode.Value
-        if pMode == 'Up' then pitch = math.rad(-180)
-        elseif pMode == 'Down' then pitch = math.rad(180)
-        elseif pMode == 'Random' then pitch = math.rad(math.random(-180, 180))
-        elseif pMode == 'Static' then pitch = math.rad(Options.PitchAngle.Value) end
+        local finalPitch = 0
+        if pitchMode == 'Static' then
+            finalPitch = math.rad(pitchAngle)
+        elseif pitchMode == 'Up' then
+            finalPitch = math.rad(-89)
+        elseif pitchMode == 'Down' then
+            finalPitch = math.rad(89)
+        elseif pitchMode == 'Random' then
+            finalPitch = math.rad(math.random(-89, 89))
+        end
 
         if Cache.waist then
-            Cache.waist.Transform = CFrame.Angles(pitch, yaw, 0)
-        elseif Cache.rootJoint then
-            Cache.rootJoint.Transform = CFrame.Angles(pitch, 0, yaw)
+            Cache.waist.C0 = CFrame.new(0, 0.85, 0) * CFrame.Angles(finalPitch, finalYaw, 0)
         end
-
-        if Cache.neck then
-            Cache.neck.Transform = CFrame.Angles(pitch, 0, 0)
+        if Cache.rootJoint then
+            Cache.rootJoint.C0 = CFrame.new(0, 0, 0) * CFrame.Angles(math.rad(-90), 0, math.rad(-180) + finalYaw)
         end
     end
 end)
 
--- 무한 점프
-UserInputService.JumpRequest:Connect(function()
-    if Toggles.JumpEnabled.Value and LocalPlayer.Character then
-        local hum = LocalPlayer.Character:FindFirstChild("Humanoid")
-        if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+-- [Misc 탭]
+local MiscGroup = Tabs.Misc:AddLeftGroupbox('Misc')
+MiscGroup:AddButton('FPS Boost', function()
+    for _, v in pairs(workspace:GetDescendants()) do
+        if v:IsA("BasePart") or v:IsA("Decal") then
+            v.Material = Enum.Material.SmoothPlastic
+            if v:IsA("Decal") then v.Transparency = 1 end
+        end
     end
 end)
 
--- Settings 탭
-local LeftMenuGroup = Tabs.Settings:AddLeftGroupbox('System Control')
-LeftMenuGroup:AddButton('Unload Script', function() Library:Unload() end)
-LeftMenuGroup:AddLabel('Menu Toggle'):AddKeyPicker('MenuKeybind', { Default = 'RightControl', Text = 'Menu keybind', NoUI = true })
+MiscGroup:AddButton('Rejoin', function()
+    game:GetService("TeleportService"):Teleport(game.PlaceId, LocalPlayer)
+end)
+
+-- [Settings 탭]
+local MenuGroup = Tabs.Settings:AddLeftGroupbox('Menu')
+MenuGroup:AddLabel('Menu Keybind'):AddKeybind('MenuKeybind', { Default = 'End', NoUI = true, Text = 'Menu Keybind' })
+
 Library.ToggleKeybind = Options.MenuKeybind
