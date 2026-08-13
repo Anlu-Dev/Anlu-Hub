@@ -4,6 +4,7 @@ local LocalPlayer = Players.LocalPlayer
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CoreGui = game:GetService("CoreGui")
 local Camera = workspace.CurrentCamera
 local Mouse = LocalPlayer:GetMouse()
 
@@ -62,18 +63,31 @@ local Library = loadstring(libRaw)()
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local VirtualUser = game:GetService("VirtualUser")
 
--- [[ 실시간 상태 표시 UI (Drawing) ]]
-local StatusLabel = Drawing.new("Text")
-StatusLabel.Size = 20
-StatusLabel.Center = true
-StatusLabel.Outline = true
-StatusLabel.OutlineColor = Color3.new(0, 0, 0)
-StatusLabel.Font = 2 -- Monospace
+-- [[ 실시간 상태 표시 UI (ScreenGui 방식 - 100% 가시성 보장) ]]
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "AnluStatusGui"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.DisplayOrder = 999
+pcall(function() ScreenGui.Parent = CoreGui end)
+if not ScreenGui.Parent then ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+local StatusLabel = Instance.new("TextLabel")
+StatusLabel.Name = "StatusLabel"
+StatusLabel.Parent = ScreenGui
+StatusLabel.BackgroundColor3 = Color3.new(0, 0, 0)
+StatusLabel.BackgroundTransparency = 1
+StatusLabel.Position = UDim2.new(0.5, 0, 0.5, 40) -- 조준점 아래
+StatusLabel.Size = UDim2.new(0, 200, 0, 30)
+StatusLabel.Font = Enum.Font.Code
+StatusLabel.TextColor3 = Color3.new(1, 1, 1)
+StatusLabel.TextSize = 20
+StatusLabel.TextStrokeTransparency = 0
+StatusLabel.Text = ""
 StatusLabel.Visible = false
 
 -- 2. UI 구성 (원래 코드 100% 무생략 복구)
 local Window = Library:CreateWindow({
-    Title = 'Anlu Hub | Ghost-Status Edition',
+    Title = 'Anlu Hub | Ghost-Status Fixed',
     Center = true,
     AutoShow = true,
     TabPadding = 8,
@@ -94,7 +108,7 @@ local TargetGroup = Tabs.Main:AddRightGroupbox('Rage Target Settings')
 
 RageGroup:AddToggle('RageEnabled', {Text = 'Enable Rage Bot', Default = false})
 RageGroup:AddToggle('VoidSpam', {Text = 'Enable Void Spam', Default = false})
-RageGroup:AddLabel('Desync & Status Integrated 👻')
+RageGroup:AddLabel('Desync & Status Fixed 👻')
 
 local TargetStatusLabel = TargetGroup:AddLabel('Target Status: None')
 TargetGroup:AddToggle('TeamCheck', {Text = 'Team Check', Default = false})
@@ -203,51 +217,36 @@ local lastStateChange = os.clock()
 RunService.Heartbeat:Connect(function()
     _G.RageActive = Toggles.RageEnabled.Value
     local char = LocalPlayer.Character
-    if not char then 
-        StatusLabel.Visible = false
-        return 
-    end
+    if not char then StatusLabel.Visible = false return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChild("Humanoid")
-    if not hrp or not hum or hum.Health <= 0 then 
-        StatusLabel.Visible = false
-        return 
-    end
+    if not hrp or not hum or hum.Health <= 0 then StatusLabel.Visible = false return end
 
     _G.CurrentTargetPart, CurrentTargetPlayer = GetValidTarget()
     
     -- [[ 실시간 상태 업데이트 ]]
     if _G.RageActive then
         StatusLabel.Visible = true
-        StatusLabel.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2 + 30)
         
         local currentStatus = "Searching..."
-        local statusColor = Color3.fromRGB(255, 255, 255) -- White
+        local statusColor = Color3.fromRGB(255, 255, 255)
 
         if _G.CurrentTargetPart then
             if Toggles.VoidSpam.Value then
-                if voidState == "Attack" then
-                    currentStatus = "Attacking"
-                    statusColor = Color3.fromRGB(255, 0, 0) -- Red
-                else
-                    currentStatus = "Void"
-                    statusColor = Color3.fromRGB(0, 255, 255) -- Cyan
-                end
+                if voidState == "Attack" then currentStatus = "Attacking"; statusColor = Color3.fromRGB(255, 0, 0)
+                else currentStatus = "Void"; statusColor = Color3.fromRGB(0, 255, 255) end
             else
-                currentStatus = "Attacking"
-                statusColor = Color3.fromRGB(255, 0, 0) -- Red
+                currentStatus = "Attacking"; statusColor = Color3.fromRGB(255, 0, 0)
             end
             
-            -- 재장전 체크 (간단 구현)
             local tool = char:FindFirstChildOfClass("Tool")
             if tool and tool:FindFirstChild("Ammo") and tool.Ammo.Value == 0 then
-                currentStatus = "Reloading"
-                statusColor = Color3.fromRGB(255, 255, 0) -- Yellow
+                currentStatus = "Reloading"; statusColor = Color3.fromRGB(255, 255, 0)
             end
         end
         
         StatusLabel.Text = "Rage Bot : " .. currentStatus
-        StatusLabel.Color = statusColor
+        StatusLabel.TextColor3 = statusColor
     else
         StatusLabel.Visible = false
     end
@@ -300,8 +299,8 @@ MiscGroup:AddButton('FPS Boost', function() for _, v in pairs(workspace:GetDesce
 MiscGroup:AddButton('Rejoin', function() game:GetService("TeleportService"):Teleport(game.PlaceId, LocalPlayer) end)
 
 local LeftMenuGroup = Tabs.Settings:AddLeftGroupbox('System Control')
-LeftMenuGroup:AddButton('Unload Script', function() Library:Unload(); StatusLabel:Remove() end)
+LeftMenuGroup:AddButton('Unload Script', function() Library:Unload(); ScreenGui:Destroy() end)
 LeftMenuGroup:AddLabel('Menu Toggle'):AddKeyPicker('MenuKeybind', { Default = 'RightControl', Text = 'Menu keybind', NoUI = true })
 Library.ToggleKeybind = Options.MenuKeybind
 
-print("[Anlu Hub] Ghost-Status Edition Final Loaded! 🚀💎✨")
+print("[Anlu Hub] Ghost-Status Fixed Loaded! 🚀💎✨")
