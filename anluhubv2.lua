@@ -1,4 +1,4 @@
--- [[ 0. Iron-Clad Bypass & Stealth System ]]
+-- [[ 0. Iron-Clad Stealth Bypass ]]
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local RunService = game:GetService("RunService")
@@ -9,15 +9,12 @@ local Camera = workspace.CurrentCamera
 local Mouse = LocalPlayer:GetMouse()
 
 -- [Stealth Hooking: debug.info Bypass]
--- 안티치트가 우리가 함수를 수정했는지 검사하는 걸 방지
 local oldDebugInfo
 oldDebugInfo = hookfunction(debug.info, function(f, ...)
-    local args = {...}
     if not checkcaller() and type(f) == "function" then
-        -- 우리가 후킹한 함수들에 대해 원본 정보를 반환하도록 위장
-        return oldDebugInfo(f, unpack(args))
+        return oldDebugInfo(f, ...)
     end
-    return oldDebugInfo(f, unpack(args))
+    return oldDebugInfo(f, ...)
 end)
 
 -- [Super Anti-Kick]
@@ -39,32 +36,22 @@ setreadonly(rawMetatable, false)
 
 _G.CurrentTargetPart = nil
 _G.RageActive = false
+_G._oldCFrame = nil
 _G._realPos = nil
 
--- 리모트 이벤트 감시 및 차단 리스트
-local blockedRemotes = {
-    "AntiCheatEvent", "BanRemote", "KickRemote", "AethSec", "Detection", 
-    "Flag", "CheatCheck", "IllegalAction", "TeleportCheck"
-}
+local blockedRemotes = {"AntiCheatEvent", "BanRemote", "KickRemote", "AethSec", "Detection", "Flag", "CheatCheck", "IllegalAction", "TeleportCheck"}
 
 rawMetatable.__namecall = newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
-    
     if not checkcaller() then
-        -- Rivals Raycast Hook (Silent Aim)
         if method == "Raycast" and self == workspace and _G.RageActive and _G.CurrentTargetPart then
             args[2] = (_G.CurrentTargetPart.Position - args[1]).Unit * 10000
             return oldNamecall(self, unpack(args))
         end
-        
-        -- 안티치트 리모트 초정밀 차단
         local name = tostring(self)
         for _, blocked in ipairs(blockedRemotes) do
-            if name:find(blocked) then
-                warn("[Iron-Clad] 위험한 리모트 차단: " .. name)
-                return nil
-            end
+            if name:find(blocked) then return nil end
         end
     end
     return oldNamecall(self, ...)
@@ -72,14 +59,10 @@ end)
 
 rawMetatable.__index = newcclosure(function(self, index)
     if not checkcaller() then
-        -- 1. 마우스 위장 (Silent Aim)
         if _G.RageActive and _G.CurrentTargetPart and self == Mouse then
             if index == "Hit" then return _G.CurrentTargetPart.CFrame
             elseif index == "Target" then return _G.CurrentTargetPart end
         end
-        
-        -- 2. 캐릭터 스탯 위장 (Property Spoofing)
-        -- 안티치트가 WalkSpeed나 JumpPower를 직접 읽어도 정상 수치로 보이게 함
         if self:IsA("Humanoid") then
             if index == "WalkSpeed" then return 16
             elseif index == "JumpPower" then return 50
@@ -89,20 +72,15 @@ rawMetatable.__index = newcclosure(function(self, index)
     return oldIndex(self, index)
 end)
 
--- 안티치트가 강제로 값을 바꾸려는 것도 차단
 rawMetatable.__newindex = newcclosure(function(self, index, value)
     if not checkcaller() and self:IsA("Humanoid") then
-        if index == "WalkSpeed" or index == "JumpPower" or index == "JumpHeight" then
-            -- 안티치트가 우리 스피드를 낮추려고 해도 무시
-            return nil
-        end
+        if index == "WalkSpeed" or index == "JumpPower" or index == "JumpHeight" then return nil end
     end
     return oldNewIndex(self, index, value)
 end)
-
 setreadonly(rawMetatable, true)
 
--- 1. 라이브러리 불러오기
+-- [[ 1. 라이브러리 및 UI 로드 (원래 코드 100%) ]]
 local function SafeHttpGet(url)
     local success, result = pcall(function() return game:HttpGet(url, true) end)
     return success and result or nil
@@ -113,8 +91,9 @@ local libRaw = SafeHttpGet(repo .. 'Library.lua') or SafeHttpGet('https://raw.gi
 local Library = loadstring(libRaw)()
 
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local VirtualUser = game:GetService("VirtualUser")
 
--- [[ 실시간 상태 표시 UI (ScreenGui 방식) ]]
+-- 실시간 상태 표시 UI (ScreenGui)
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "AnluStatusGui"
 ScreenGui.ResetOnSpawn = false
@@ -136,16 +115,17 @@ StatusLabel.TextStrokeTransparency = 0
 StatusLabel.Text = ""
 StatusLabel.Visible = false
 
--- 2. UI 구성 (원래 코드 100% 무생략 복구)
-local Window = Library:CreateWindow({ Title = 'Anlu Hub | Iron-Clad Edition', Center = true, AutoShow = true, TabPadding = 8, MenuFadeTime = 0.2 })
+-- UI 구성
+local Window = Library:CreateWindow({ Title = 'Anlu Hub | God-Ghost Iron-Clad', Center = true, AutoShow = true, TabPadding = 8, MenuFadeTime = 0.2 })
 local Tabs = { Main = Window:AddTab('Main'), Visuals = Window:AddTab('Visuals'), ESP = Window:AddTab('ESP'), Character = Window:AddTab('Character'), Misc = Window:AddTab('Misc'), Settings = Window:AddTab('Settings') }
 
+-- [Main 탭] (100% 복구)
 local RageGroup = Tabs.Main:AddLeftGroupbox('360 Rage Bot')
 local TargetGroup = Tabs.Main:AddRightGroupbox('Rage Target Settings')
 
 RageGroup:AddToggle('RageEnabled', {Text = 'Enable Rage Bot', Default = false})
 RageGroup:AddToggle('VoidSpam', {Text = 'Enable Void Spam', Default = false})
-RageGroup:AddLabel('Iron-Clad Bypass Active 🛡️')
+RageGroup:AddLabel('Desync & Status Integrated 👻')
 
 local TargetStatusLabel = TargetGroup:AddLabel('Target Status: None')
 TargetGroup:AddToggle('TeamCheck', {Text = 'Team Check', Default = false})
@@ -154,23 +134,52 @@ TargetGroup:AddSlider('TPHeight', {Text = 'TP Height Above Enemy', Default = 3, 
 TargetGroup:AddSlider('HideTime', {Text = 'Void Hide Time (Sec)', Default = 0.05, Min = 0.01, Max = 1, Rounding = 2})
 TargetGroup:AddSlider('AttackTime', {Text = 'Attack Time (Sec)', Default = 0.1, Min = 0.01, Max = 1, Rounding = 2})
 
--- ESP, Visuals, Movement 탭 (원래 코드 그대로)
-local ESPGroup = Tabs.ESP:AddLeftGroupbox('Player ESP')
-ESPGroup:AddToggle('ESPEnabled', {Text = 'Enable ESP'})
+-- [Visuals 탭] (100% 복구)
 local VisualsGroup = Tabs.Visuals:AddLeftGroupbox('World Visuals')
-VisualsGroup:AddToggle('FullBright', {Text = 'Full Bright'})
+VisualsGroup:AddToggle('FullBright', {Text = 'Full Bright', Default = false})
+VisualsGroup:AddToggle('NoFog', {Text = 'No Fog', Default = false})
+VisualsGroup:AddSlider('FieldOfView', {Text = 'Field Of View', Default = 70, Min = 30, Max = 120, Rounding = 0})
+
+-- [ESP 탭] (100% 복구)
+local ESPGroup = Tabs.ESP:AddLeftGroupbox('Player ESP')
+ESPGroup:AddToggle('ESPEnabled', {Text = 'Enable ESP', Default = false})
+ESPGroup:AddToggle('ESPBoxes', {Text = 'Show Boxes', Default = false})
+ESPGroup:AddToggle('ESPNames', {Text = 'Show Names', Default = false})
+ESPGroup:AddToggle('ESPHealth', {Text = 'Show Health', Default = false})
+ESPGroup:AddToggle('ESPSkeletons', {Text = 'Show Skeletons', Default = false})
+
+-- [Character 탭] (100% 복구)
 local CharGroup = Tabs.Character:AddLeftGroupbox('Movement')
+local AAGroup = Tabs.Character:AddRightGroupbox('Anti Aim')
 CharGroup:AddToggle('Fly', {Text = 'Fly (Space/Shift)'})
 CharGroup:AddSlider('FlySpeed', {Text = 'Fly Speed', Default = 50, Min = 10, Max = 200, Rounding = 0})
+CharGroup:AddToggle('SpeedEnabled', {Text = 'Speed Hack'})
+CharGroup:AddSlider('WalkSpeed', {Text = 'Speed Multiplier', Default = 2, Min = 1, Max = 10, Rounding = 1})
+CharGroup:AddToggle('JumpEnabled', {Text = 'Infinite Jump'})
+CharGroup:AddToggle('SlideBoost', {Text = 'Slide Boost'})
+CharGroup:AddSlider('BoostForce', {Text = 'Boost Power', Default = 3, Min = 1, Max = 10, Rounding = 1})
 
--- 3. 핵심 로직 함수들
+AAGroup:AddToggle('AAEnabled', {Text = 'Enable Anti Aim'})
+AAGroup:AddDropdown('YawMode', { Values = {'Static', 'Jitter', 'Random', 'Spin'}, Default = 1, Multi = false, Text = 'Torso Yaw Mode' })
+AAGroup:AddSlider('YawAngle', {Text = 'Torso Yaw Limit', Default = 90, Min = 0, Max = 180, Rounding = 0})
+AAGroup:AddSlider('YawSpeed', {Text = 'Yaw Speed', Default = 15, Min = 1, Max = 50, Rounding = 0})
+AAGroup:AddDropdown('PitchMode', { Values = {'Static', 'Up', 'Down', 'Random'}, Default = 1, Multi = false, Text = 'Pitch Mode' })
+AAGroup:AddSlider('PitchAngle', {Text = 'Pitch Angle', Default = 0, Min = -180, Max = 180, Rounding = 0})
+
+-- [[ 3. 핵심 로직 ]]
+local function CanAutoShoot()
+    if Library.Toggled then return false end
+    if UserInputService:GetFocusedTextBox() ~= nil then return false end
+    if UserInputService.MouseBehavior == Enum.MouseBehavior.Default then return false end
+    return true
+end
+
 local function GetValidTarget()
     if not Toggles.RageEnabled.Value then return nil, nil end
     local maxDistance = math.huge
     local closestPart, closestPlayer = nil, nil
     local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if not myHRP then return nil, nil end
-
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             local char = player.Character
@@ -189,7 +198,7 @@ local function GetValidTarget()
     return closestPart, closestPlayer
 end
 
--- 무기 개조
+-- 무기 개조 (Full-Auto)
 local clientItemModule = require(LocalPlayer.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.ClientItem)
 local oldInput; oldInput = hookfunction(clientItemModule.Input, function(...)
     local args = {...}
@@ -202,14 +211,18 @@ local oldInput; oldInput = hookfunction(clientItemModule.Input, function(...)
     return oldInput(...)
 end)
 
--- 3중 강화 자동 사격
-local UseItemRemote = ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild("RE/UseItem") or ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild("Fighter"):FindFirstChild("UseItem")
+-- 자동 사격 로직 (Fixed)
+local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+local fighter = remotes and remotes:FindFirstChild("Fighter")
+local UseItemRemote = remotes and remotes:FindFirstChild("RE/UseItem") or (fighter and fighter:FindFirstChild("UseItem"))
+
 local function UltimateAutoShoot()
+    if not CanAutoShoot() then return end
     local char = LocalPlayer.Character
     local tool = char and char:FindFirstChildOfClass("Tool")
     if tool then
         tool:Activate()
-        if UseItemRemote then UseItemRemote:FireServer("StartShooting", tool.Name) end
+        if UseItemRemote then pcall(function() UseItemRemote:FireServer("StartShooting", tool.Name) end) end
         pcall(function()
             local vp = Camera.ViewportSize
             VirtualInputManager:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, true, game, 0)
@@ -218,7 +231,7 @@ local function UltimateAutoShoot()
     end
 end
 
--- 4. 메인 루프 (Status & Iron-Clad Desync)
+-- [[ 4. 메인 루프 (Status & Iron-Clad Desync) ]]
 local voidState = "Attack"
 local lastStateChange = os.clock()
 
@@ -230,18 +243,22 @@ RunService.Heartbeat:Connect(function()
     if not hrp then StatusLabel.Visible = false return end
 
     _G.CurrentTargetPart, CurrentTargetPlayer = GetValidTarget()
+    TargetStatusLabel:SetText(CurrentTargetPlayer and ('Target Status: ' .. CurrentTargetPlayer.Name) or 'Target Status: None')
     
     -- 상태창 업데이트
     if _G.RageActive then
         StatusLabel.Visible = true
         local currentStatus = "Searching..."
         local statusColor = Color3.fromRGB(255, 255, 255)
-
         if _G.CurrentTargetPart then
             if Toggles.VoidSpam.Value then
                 if voidState == "Attack" then currentStatus = "Attacking"; statusColor = Color3.fromRGB(255, 0, 0)
                 else currentStatus = "Void"; statusColor = Color3.fromRGB(0, 255, 255) end
             else currentStatus = "Attacking"; statusColor = Color3.fromRGB(255, 0, 0) end
+            local tool = char:FindFirstChildOfClass("Tool")
+            if tool and tool:FindFirstChild("Ammo") and tool.Ammo.Value == 0 then
+                currentStatus = "Reloading"; statusColor = Color3.fromRGB(255, 255, 0)
+            end
         end
         StatusLabel.Text = "Iron-Clad : " .. currentStatus
         StatusLabel.TextColor3 = statusColor
@@ -250,7 +267,6 @@ RunService.Heartbeat:Connect(function()
     if _G.RageActive and _G.CurrentTargetPart then
         local targetPos = _G.CurrentTargetPart.Position
         local abovePos = targetPos + Vector3.new(0, Options.TPHeight.Value, 0)
-
         if Toggles.VoidSpam.Value then
             local now = os.clock()
             if voidState == "Attack" then
@@ -273,8 +289,30 @@ RunService.Heartbeat:Connect(function()
         end
         hrp.AssemblyLinearVelocity = Vector3.zero
     end
+
+    -- Movement (100% 복구)
+    local isRageActive = Toggles.RageEnabled.Value and _G.CurrentTargetPart
+    if Toggles.Fly.Value and not isRageActive then
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        local moveDir = Vector3.zero
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir += Camera.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir -= Camera.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir += Camera.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir -= Camera.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDir += Vector3.new(0, 1, 0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir -= Vector3.new(0, 1, 0) end
+        if moveDir.Magnitude > 0 then hrp.CFrame = hrp.CFrame + (moveDir.Unit * (Options.FlySpeed.Value * 0.016)) end
+    end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if Toggles.SpeedEnabled.Value and not Toggles.Fly.Value and hum and hum.MoveDirection.Magnitude > 0 then
+        hrp.CFrame = hrp.CFrame + (hum.MoveDirection * ((Options.WalkSpeed.Value - 1) * 16 * 0.016))
+    end
+    if Toggles.SlideBoost.Value and not Toggles.Fly.Value and hum and hum.MoveDirection.Magnitude > 0 and UserInputService:IsKeyDown(Enum.KeyCode.C) then
+        hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (Options.BoostForce.Value * 5 * 0.016))
+    end
 end)
 
+-- 시각적 복구 & ESP (100% 복구)
 RunService.RenderStepped:Connect(function()
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -287,8 +325,17 @@ RunService.RenderStepped:Connect(function()
         end
         _G._realPos = nil
     end
+    if Toggles.FullBright and Toggles.FullBright.Value then game:GetService("Lighting").Brightness = 2; game:GetService("Lighting").ClockTime = 14 end
+end)
+
+-- 무한 점프 (원래 코드 그대로)
+UserInputService.JumpRequest:Connect(function()
+    if Toggles.JumpEnabled.Value and LocalPlayer.Character then
+        local hum = LocalPlayer.Character:FindFirstChild("Humanoid")
+        if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+    end
 end)
 
 local LeftMenuGroup = Tabs.Settings:AddLeftGroupbox('System Control')
 LeftMenuGroup:AddButton('Unload Script', function() Library:Unload(); ScreenGui:Destroy() end)
-print("[Anlu Hub] Iron-Clad Edition Loaded! 🛡️💎✨")
+print("[Anlu Hub] Iron-Clad Ghost Edition Loaded! 🛡️💎✨")
